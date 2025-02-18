@@ -3,7 +3,6 @@ import sys, os
 import flywheel
 import pandas as pd
 import re
-from helper_functions import get_project_id
 
 import logging
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s %(levelname)s %(message)s')
@@ -54,17 +53,11 @@ if __name__ == "__main__":
     #Setup the flywheel client
     fw = flywheel.Client('')
     fw.get_config().site.api_url
-    
-    PROJECT_LABEL="<Project Name>"
-    
-    project_id = get_project_id(fw, PROJECT_LABEL)
-    if project_id:
-        print(f'Project ID is: {project_id}.')
-    else:
-        print(f'No Project with label {PROJECT_LABEL} found.')
+
+    PROJECT_PATH = "<group/project>"   ## e.g.  project_path = "mbanich/ABCDQA"
     
     # download project data for local analyses
-    project = fw.get_project(project_id)
+    project = fw.get(fw.lookup(PROJECT_PATH).id)
     
     # path to download directory
     path='<path-to-downloads>'
