@@ -1,0 +1,156 @@
+#!/bin/bash
+#
+# randomise gfeat
+#__________________________________________________________________________
+#
+# SYNTAX
+#     randomise_gfeat <name of gfeat directory> [options]
+#     call from group_analyses directory
+#
+#     Mandatory Input: name of gfeat directory
+#     Optional Inputs: Must enter all or none
+#         -correction method: T uses TFCE, x does voxel-wise correction C uses cluster mass, c uses cluster extent (not recommended)
+#
+# DESCRIPTION
+# Run randomise for all of the contrasts in a gfeat, naming output according to contrast names in Feat.
+# Need to have run a complete higher-level Feat analysis.
+#
+# The output will go into a randomise_results directory in the gfeat dir
+# JMO 09/25/2013
+#
+# KLP 11/05/2015 allow CLUSTEROPTS to include uncorrp
+#                change output directory to randomise_results2
+#                get rid of inappropriate back ticks in c and C options
+#                if --parallel, use randomise_parallel
+# KLP 11/15/2015 update from randomise_gfeat_grid2 to
+#                change output directory to randomise_results3
+# KLP 07/27/2019 allow -1 option
+#__________________________________________________________________________
+#
+usage() {
+    {
+	echo "University of Colorado, Boulder (Banich lab)"
+	echo "Usage: randomise_gfeat <gfeat_dir> [options]"
+	echo
+	echo "Options:"
+	echo "  -o <prefix>     output prefix (default: random)"
+	echo "  -d <design.mat> name of design matrix (default: design.mat)"
+	echo "  -t <design.con> name of T contrast file (default: design.con)"
+	echo "  -F <design.fts> name of F contrast file (default: design.fts)"
+	echo "  -m <mask>       name of mask file (default: mask.nii.gz)"
+        echo "  -T              run with TFCE option (default over other correction options"
+	echo "  -C <thr>        run with cluster mass option, with given Z threshold"
+	echo "  -c <thr>        run with cluster extent option (cluster mass recommended over extent), with given Z threshold"
+	echo "  -x              run with voxelwise correction option"
+	echo "  -n <Nperms>     number of permutations (default: 5000)"
+	echo "  -D              demean EVs in the design matrix"
+	echo "  -1		perform 1-sample group-mean test instead of generic permutation test"
+        echo "  --uncorrp       output uncorrected p-value images"
+        echo "  --parallel      use randomise_parallel instead of randomise"
+    } >&2
+
+    exit 1
+}
+
+### PARSE ARGUMENTS
+if [ ! $1 ]; then
+    usage
+fi
+
+# defaults
+prefix=random
+matrix=design.mat
+confile=design.con
+Ftest=design.fts
+mask=mask.nii.gz
+Nperm=5000
+Cthr=2.3
+CLUSTEROPTS=" -T"
+RunF=0
+DEMEAN=0
+script=randomise
+
+# read arguments
+while [ $1 ]; do
+    if [ -d $1 ]; then
+        gfeat=$1 
+	shift
+    elif [ $1 == "-o" ]&&[ $2 ]; then
+	prefix=$2
+	shift 2
+    elif [ $1 == "-d" ]&&[ $2 ]; then
+	matrix=$2
+	shift 2
+    elif [ $1 == "-t" ]&&[ $2 ]; then
+	confile=$2
+	shift 2
+    elif [ $1 == "-F" ]&&[ $2 ]; then
+	Ftest=$2
+	RunF=1
+	shift 2
+    elif [ $1 == "-m" ]&&[ $2 ]; then
+	mask=$2
+	shift 2
+    elif [ $1 == "-n" ]&&[ $2 ]; then
+	Nperm=$2
+	shift 2
+    elif [ $1 == "-T" ]; then
+	CLUSTEROPTS=" -T"
+	shift
+    elif [ $1 == "--uncorrp" ]; then
+	CLUSTEROPTS+=" --uncorrp"
+	shift
+    elif [ $1 == "--parallel" ]; then
+	script=randomise_parallel
+	shift
+    elif [ $1 == "-C" ]&&[ $2 ]; then
+	Cthr=$2
+	CLUSTEROPTS+=" -C $Cthr"
+	shift 2
+    elif [ $1 == "-c" ]&&[ $2 ]; then
+	Cthr=$2
+	CLUSTEROPTS+=" -c $Cthr"
+	shift 2
+    elif [ $1 == "-x" ]; then
+	CLUSTEROPTS+=" -x"
+	shift
+    elif [ $1 == "-1" ]; then
+	CLUSTEROPTS+=" -1"
+	shift
+    elif [ $1 == "-D" ]; then
+	DEMEAN=1
+	shift
+    else
+	echo "UNRECOGNIZED INPUT: $1" >&2
+	usage
+    fi
+done
+
+workdir=$PWD
+#outdir=$workdir/$gfeat/randomise_results
+#outdir=$workdir/$gfeat/randomise_results2
+outdir=$workdir/$gfeat/randomise_results3
+mkdir -p $outdir
+echo "THIS IS THE NEW SCRIPT: AKH 2024"
+echo $workdir/$gfeat
+cd $workdir/$gfeat
+echo $PWD
+for c in cope*.feat; do
+    cd $workdir/$gfeat
+    contrast=`cat report_stats.html | grep $c | cut -d '(' -f2 | cut -d ')' -f1 | sed -e 's|[() ]|_|g' -e 's|>|-|g' -e 's|<|-lt-|g' -e 's|&|+|g' `
+    echo $contrast
+    cd $workdir/$gfeat/$c
+    logs=$outdir/${prefix}_${contrast}_${Nperm}_logs
+    mkdir -p $logs
+    if [ $RunF = 1 ]&&[ $DEMEAN = 1 ]; then
+	fsl_sub -l $logs $script -i filtered_func_data.nii.gz -o $outdir/${prefix}_${contrast}_${Nperm} -m $mask -d $matrix -t $confile -F $Ftest $CLUSTEROPTS -n $Nperm -D
+    elif [ $RunF = 1 ]&&[ $DEMEAN = 0 ]; then
+	fsl_sub -l $logs $script -i filtered_func_data.nii.gz -o $outdir/${prefix}_${contrast}_${Nperm} -m $mask -d $matrix -t $confile -F $Ftest $CLUSTEROPTS -n $Nperm
+    elif [ $RunF = 0 ]&&[ $DEMEAN = 1 ]; then
+	fsl_sub -l $logs $script -i filtered_func_data.nii.gz -o $outdir/${prefix}_${contrast}_${Nperm} -m $mask -d $matrix -t $confile $CLUSTEROPTS -n $Nperm -D
+    else
+	fsl_sub -l $logs $script -i filtered_func_data.nii.gz -o $outdir/${prefix}_${contrast}_${Nperm} -m $mask -d $matrix -t $confile $CLUSTEROPTS -n $Nperm
+    fi
+done
+
+cd $workdir

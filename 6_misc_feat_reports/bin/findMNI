@@ -1,0 +1,37 @@
+#!/bin/bash
+
+# this tiny function fetches the path of the average MNI brain
+# used in several homegrown scripts
+# can change in different FSL releases, hence the function (which may itself need to be changed)
+# more robust route would be a find command, but that's too slow
+
+usage() {
+    echo "Usage: findMNI [<r>]"
+    echo "Options:"
+    echo "  <r> indicates the resolution:"
+    echo "    if <r> is \"1\", \"-1\", \"-1mm\", etc., find 1mm resolution MNI"
+    echo "    if <r> is \"5\", \".5\", \"-.5\", \"-.5mm\", etc., find .5mm resolution MNI"
+    echo "    if no <r> is given, find 2mm resolution MNI"
+    exit 7
+}
+
+if [ $# -eq 0 ]; then
+    ls $FSLDIR/*/*/MNI152_T1_2mm_brain.*[zr] | head -1    
+elif [ $# -gt 1 ]; then
+    usage
+elif [[ "$*" =~ help ]]; then
+    usage
+elif [[ "$1" =~ 2 ]]; then
+    ls $FSLDIR/*/*/MNI152_T1_2mm_brain.*[zr] | head -1
+elif [[ "$1" =~ 1 ]]; then
+#elif [ "$1" == "-1mm" ]||[ "$1" == "-1" ]; then
+    ls $FSLDIR/*/*/MNI152_T1_1mm_brain.*[zr] | head -1
+elif [[ "$1" =~ 5 ]]; then
+#elif [ "$1" == "-.5mm" ]||[ "$1" == "-.5" ]; then
+    ls /data/projects/banichlab/tools/bin/MNI152_T1_0.5mm_brain.nii.gz
+else
+    usage
+fi
+
+
+exit 0

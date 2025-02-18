@@ -1,0 +1,499 @@
+#!/bin/bash
+# Author: Luka Ruzic
+
+# KLP
+# 02-03-2014 use /tmp instead of /data/tmp for mktemp output
+
+usage() {
+    {
+    echo "University of Colorado, Boulder (Banich lab)"
+    echo "Usage: mine4stats <input_analysis.(g)feat> [<output_directory>] [stats] [options] [post processes]"
+#    echo "       (COMMAND IS ORDER-SENSITIVE)"
+    echo "Options:"
+    echo "    -a: automatic (DEFAULT: interactive)"
+    echo "    -i: produce inverted statmaps"
+    echo "    -d: include design files"
+    echo "    -r: produce README stub"
+    echo "Stats:"
+    echo "    -z: mine for Z stat maps (DEFAULT)"
+    echo "    -c: mine for cope maps"
+    echo "    -v: mine for varcope maps"
+    echo "    -p: mine for percent signal change and variance maps (gfeats only)"
+    echo "    -x: mine for randomise cluster corrected maps"
+    echo "    -all: mine for all stats"
+    echo "Post processes:  (MUST BE LISTED LAST)"
+    echo "    --noinverse: must use this flag if inverses are created within the FEAT analysis"
+    echo "    --c: produce cluster reports for zstats (can be followed by any option(s) to clusterall)"
+    echo "         -nn:  add --no-naming option to cluster"
+    echo "         note: if -i is not set, and no *_neg.zstat"
+    echo "    --m: produce max masks with mkmaxmask (can be followed by any options to mkmaxmask)"
+    echo "    --t: produce thresholded zstats (can take options to clusterthresh)"
+    echo "    --all: combines --c, --m, --t"
+    echo "    --ts: produce multi-thresholded zstats (uses clusterthreshes -m)"
+    #echo "    --mc: produce statcharts (can take options to mkstatchart)"
+    #echo "    --a: produce tarball and [optionally] send to cervelle (can take options to mktarball)"
+    echo
+    echo "Description:"
+    echo "    - finds zstats, copes, and varcopes, from <input_analysis> as desired"
+    echo "    - calculates percent signal change maps and percent signal change variance maps as desired"
+    echo "    - places all of the above in a single output directory"
+    echo "    - attempts to name all maps according to the contrast names given in the design files"
+    echo "    - zstats, copes, varcopes, %sc and %sc variance are explicitly labeled as such"
+    echo
+    echo "Notes:"
+    echo "   default output directory name: <input_analysis>.summary"
+    echo "   can deal with lower level analyses"
+    echo "   can deal with 2nd or 3rd level analyses (e.g., subjects->groups or runs->subjects->groups)"
+    echo
+    } >&2
+
+    exit 7
+}
+
+mktempfail() {
+    echo "ERROR: failed to create temporary file with mktemp; exiting" >&2
+    exit 79
+}
+
+### SETUP
+HERE=$PWD
+#WD=`mktemp -d -p /data/tmp` || mktempfail
+WD=`mktemp -d -p /tmp` || mktempfail
+
+### ERROR-CHECK THE ARGUMENTS
+# look for input directory
+[ ! $1 ] && usage
+if [ ! -d $1 ]; then echo "$1 does not exist" >&2; usage; fi
+SOURCE=$1; shift
+
+# look for output directory
+if [ $1 ]&&[ "${1:0:1}" != "-" ]; then
+    OUTD=${1%.summary}.summary; shift 1
+else
+    OUTD=${SOURCE%.*}.summary
+fi
+
+# look for options
+INTERACT=set
+NOSTATS=set
+while [ "$1" ]; do
+    if [ "$1" == "-a" ]; then
+	unset INTERACT; shift
+    elif [ "$1" == "-i" ]; then
+	INVERT=set; shift
+    elif [ "$1" == "-d" ]; then
+	DESIGNS=set; shift
+    elif [ "$1" == "-r" ]; then
+	README=set; shift
+    elif [ "$1" == "-z" ]; then
+	z=set; unset NOSTATS; shift
+    elif [ "$1" == "-c" ]; then
+	c=set; unset NOSTATS; shift
+    elif [ "$1" == "-x" ]; then
+	x=set; unset NOSTATS; shift
+    elif [ "$1" == "-v" ]; then
+	v=set; unset NOSTATS; shift
+    elif [ "$1" == "-p" ]; then
+	p=set; unset NOSTATS; shift
+    elif [ "$1" == "-all" ]; then
+	ALLSTATS=set
+	shift
+    elif [ "$1" == "--noinverse" ]; then
+	NO_INVERTING=set
+	shift
+    elif [ "$1" == "--c" ]; then
+	CLUSTER=set
+	shift
+	while [ "$1" ]&&[ ${1:0:2} != "--" ]; do
+	    if [ "$1" == "-nn" ]; then
+		clusterall_args+=" --no-naming"
+	    else
+		clusterall_args+=" $1"
+	    fi
+	    shift
+	done
+    elif [ "$1" == "--m" ]; then
+	MAXMASK=set
+	shift
+	while [ "$1" ]&&[ ${1:0:2} != "--" ]; do
+	    mkmaxmasks_args+=" $1"
+	    shift
+	done
+    elif [ "$1" == "--t" ]; then
+	THRESHOLD=set
+	shift
+	while [ "$1" ]&&[ ${1:0:2} != "--" ]; do
+	    clusterthresh_args+=" $1"
+	    shift
+	done
+    elif [ "$1" == "--ts" ]; then
+	MULTITHRESH=set
+	shift
+	#while [ $1 ]&&[ ${1:0:2} != "--" ]; do
+	#    clusterthreshes_args+=" "$1""
+	#    shift
+	#done
+    elif [ $1 == "--all" ]; then
+	CLUSTER=set
+	MAXMASK=set
+	THRESHOLD=set
+	#MULTITHRESH=set
+	shift
+    else
+	echo "UNRECOGNIZED OPTION: $1" >&2
+	usage
+    fi
+done
+if [ $NOSTATS ]; then z=set; fi
+if [ $ALLSTATS ]; then z=set; c=set; v=set; p=set; fi
+[ $NO_INVERTING ] && unset INVERT
+
+#nevs=
+#for ((c1=1;c1<=16;c1++)); do 
+#    for ((c2=1;c2<=16;c2++)); do 
+#	if [ $c1 -ne $c2 ]; then 
+#	    for ((e=1;e<=2;e++)); do 
+#		awk '/con_real'$c1'\.'$e')/ {first=$3} /con_real'$c2'\.'$e')/ {second=$3} END {print first-second}' $SOURCE/design.fsf
+#	    done | awk '{s+=$1} END {print s}'
+#	fi
+#    done
+#done | grep -v '^0$' | wc -l
+
+
+############
+### MAIN ###
+############
+echo ... FIGURING OUT FILE-NAMING
+### FOR ***HIGHER*** LEVEL ANALYSIS
+#if [ "X${SOURCE/*.gfeat/match}" == "Xmatch" ]; then
+if [ `fsfinfo -t $SOURCE` -eq 2 ]; then
+    # put contrast names from lower and higher levels into an array
+    lname=("" `fsfinfo -lcon $SOURCE | sed 's|contrast [0-9 ]* ||' | sed -e 's|[() ]|_|g' -e 's|>|-|g' -e 's|<|-lt-|g' -e 's|&|+|g'`)
+    hname=("" `fsfinfo -hcon $SOURCE | sed 's|contrast [0-9 ]* ||' | sed -e 's|[() ]|_|g' -e 's|>|-|g' -e 's|<|-lt-|g' -e 's|&|+|g'`)
+
+    fsfinfo -i $SOURCE | head -1 | grep -q '\.gfeat/'; if [ $? -eq 0 ]; then  ### SOURCE IS 3-LEVEL ANALYSIS
+	hasIntermediate=set
+	iname=("" `fsfinfo -icon $SOURCE | sed 's|contrast [0-9 ]* ||' | sed -e 's|[() ]|_|g' -e 's|>|-|g' -e 's|<|-lt-|g' -e 's|&|+|'`)
+    fi
+
+    ### ASK PERMISSION TO CONTINUE
+    echo "SOURCE DIRECTORY: $SOURCE"
+    echo "OUTPUT DIRECTORY: $OUTD"
+    echo "LOWER LEVEL CONTRASTS:";  n=1; for i in ${lname[*]}; do echo $n $i; let n++; done
+    [ $hasIntermediate ] && echo "intermediate level contrasts: ${iname[*]}"
+    echo "HIGHER LEVEL CONTRASTS:"; n=1; for i in ${hname[*]}; do echo $n $i; let n++; done
+    echo
+    if [ $INTERACT ]; then 
+	read -n 1 -s -p "continue? [y/n]  " ans
+	echo
+    fi
+    
+    ### PROCEED IF DESIRED
+    if [ ! $INTERACT ]||[ "X`echo $ans | tr [a-z] [A-Z]`" = "XY" ]; then
+	echo ... EXTRACTING STATMAPS
+	mkdir -p $OUTD/{zstats,randomise,cluster_reports,copes,pctSC,logs}
+	
+	[ $z ]&& for map in `ls $SOURCE/cope*feat/stats/zstat*nii.gz`; do
+	    if [ $hasIntermediate ]; then
+		l=`fsfinfo -i $SOURCE | head -1 | sed 's|.*cope\([0-9]*\)\.feat|\1|'`
+		i=`echo $map | sed 's|.*cope\([0-9]*\)\.feat.*|\1|'`
+		h=`echo $map | sed 's|.*zstat\([0-9]*\)\.nii\.gz|\1|'`
+		cp -p $map $OUTD/zstats/${lname[l]}_${iname[i]}_${hname[h]}.zstat.nii.gz
+	    else
+		l=`echo $map | sed 's|.*cope\([0-9]*\)\.feat.*|\1|'`
+		h=`echo $map | sed 's|.*zstat\([0-9]*\)\.nii\.gz|\1|'`
+		cp -p $map $OUTD/zstats/${lname[l]}_${hname[h]}.zstat.nii.gz
+	    fi
+	done
+	
+#	[ $x ]&& for map in `ls $SOURCE/randomise_results3/*tstat*.nii.gz`; do
+#	    if [ $hasIntermediate ]; then
+#		l=`fsfinfo -i $SOURCE | head -1 | sed 's|.*cope\([0-9]*\)\.feat|\1|'`
+#		i=`echo $map | sed 's|.*cope\([0-9]*\)\.feat.*|\1|'`
+#		h=`echo $map | sed 's|.*tstat\([0-9]*\)\.nii\.gz|\1|'`
+#		cp -p $map $OUTD/randomise/${lname[l]}_`basename $map | cut -d"_" -f2- | rev | cut -d"_" -f2- | rev`_${hname[h]}_tstat.nii.gz
+#	    else
+#		l=`echo $map | sed 's|.*cope\([0-9]*\)\.feat.*|\1|'`
+#		h=`echo $map | sed 's|.*tstat\([0-9]*\)\.nii\.gz|\1|'`
+#		cp -p $map $OUTD/randomise/`basename $map | cut -d"_" -f2- | rev | cut -d"_" -f2- | rev`_${hname[h]}_tstat.nii.gz
+#	    fi
+#	done
+	
+	[ $x ]&& for map in `ls $SOURCE/*_summary_stats/thresh_tstats/thresh*.nii.gz`; do
+	    if [ $hasIntermediate ]; then
+		l=`fsfinfo -i $SOURCE | head -1 | sed 's|.*cope\([0-9]*\)\.feat|\1|'`
+		i=`echo $map | sed 's|.*cope\([0-9]*\)\.feat.*|\1|'`
+		h=`echo $map | sed 's|.*tstat\([0-9]*\)\.nii\.gz|\1|'`
+		cp -p $map $OUTD/randomise/${lname[l]}_`basename $map`
+	    else
+		l=`echo $map | sed 's|.*cope\([0-9]*\)\.feat.*|\1|'`
+		h=`echo $map | sed 's|.*tstat\([0-9]*\)\.nii\.gz|\1|'`
+		cp -p $map $OUTD/randomise/`basename $map`
+	    fi
+	done
+	
+	[ $x ]&& for map in `ls $SOURCE/*_summary_stats/clusters_icbm_atlasq/*.csv`; do
+	    if [ $hasIntermediate ]; then
+		l=`fsfinfo -i $SOURCE | head -1 | sed 's|.*cope\([0-9]*\)\.feat|\1|'`
+		i=`echo $map | sed 's|.*cope\([0-9]*\)\.feat.*|\1|'`
+		h=`echo $map | sed 's|.*tstat\([0-9]*\)\.nii\.gz|\1|'`
+		method=`echo $map | rev | cut -d"/" -f3 | cut -d"_" -f3- | rev`
+		cp -p $map $OUTD/cluster_reports/cluster_report_${method}_${lname[l]}_`basename $map | cut -d"_" -f3-`
+	    else
+		l=`echo $map | sed 's|.*cope\([0-9]*\)\.feat.*|\1|'`
+		h=`echo $map | sed 's|.*tstat\([0-9]*\)\.nii\.gz|\1|'`
+        method=`echo $map | rev | cut -d"/" -f3 | cut -d"_" -f3- | rev`
+		cp -p $map $OUTD/cluster_reports/cluster_report_${method}_`basename $map | cut -d"_" -f3-`
+	    fi
+	done
+	
+	[ $c ]||[ $p ]&& for map in `ls $SOURCE/cope*feat/stats/cope*nii.gz`; do
+	    if [ $hasIntermediate ]; then
+		l=`fsfinfo -i $SOURCE | head -1 | sed 's|.*cope\([0-9]*\)\.feat|\1|'`
+		i=`echo $map | sed 's|.*cope\([0-9]*\)\.feat.*|\1|'`
+		h=`echo $map | sed 's|.*cope\([0-9]*\)\.nii\.gz|\1|'`
+		[ $c ]&& cp -p $map $OUTD/copes/${lname[l]}_${iname[i]}_${hname[h]}.cope.nii.gz
+		if [ $p ]; then
+		    ppheight=$(awk '/PPheights/ {print $(1 + '$h')}' $SOURCE/design.con)
+		    lcon=$(cat $SOURCE/cope$i.feat/design.lcon)
+		    scalingfactor=$(echo | awk '{print 100 * '$lcon' * '$ppheight' }')
+		    fslmaths $map -mul $scalingfactor -div $SOURCE/mean_func $OUTD/pctSC/${lname[l]}_${iname[i]}_${hname[h]}.pSC.nii.gz
+		fi
+	    else
+		l=`echo $map | sed 's|.*cope\([0-9]*\)\.feat.*|\1|'`
+		h=`echo $map | sed 's|.*cope\([0-9]*\)\.nii\.gz|\1|'`
+		[ $c ]&& cp -p $map $OUTD/copes/${lname[l]}_${hname[h]}.cope.nii.gz
+		if [ $p ]; then
+		    ppheight=$(awk '/PPheights/ {print $(1 + '$h')}' $SOURCE/design.con)
+		    lcon=$(cat $SOURCE/cope$l.feat/design.lcon)
+		    scalingfactor=$(echo | awk '{print 100 * '$lcon' * '$ppheight' }')
+		    fslmaths $map -mul $scalingfactor -div $SOURCE/mean_func $OUTD/pctSC/${lname[l]}_${hname[h]}.pSC.nii.gz
+		fi
+	    fi
+	done
+
+	[ $v ]||[ $p ]&& for map in `ls $SOURCE/cope*feat/stats/varcope*nii.gz`; do
+	    if [ $hasIntermediate ]; then
+		l=`fsfinfo -i $SOURCE | head -1 | sed 's|.*cope\([0-9]*\)\.feat|\1|'`
+		i=`echo $map | sed 's|.*cope\([0-9]*\)\.feat.*|\1|'`
+		h=`echo $map | sed 's|.*varcope\([0-9]*\)\.nii\.gz|\1|'`
+		[ $v ]&& cp -p $map $OUTD/copes/${lname[l]}_${iname[i]}_${hname[h]}.varcope.nii.gz
+		if [ $p ]; then
+		    ppheight=$(awk '/PPheights/ {print $(1 + '$h')}' $SOURCE/design.con)
+		    lcon=$(cat $SOURCE/cope$i.feat/design.lcon)
+		    scalingfactor=$(echo | awk '{print 100 * '$lcon' * '$ppheight' }')
+		    fslmaths $map -mul $scalingfactor -div $SOURCE/mean_func -mul $scalingfactor -div $SOURCE/mean_func $OUTD/pctSC/${lname[l]}_${iname[i]}_${hname[h]}.pSCvar.nii.gz
+		fi
+	    else
+		l=`echo $map | sed 's|.*cope\([0-9]*\)\.feat.*|\1|'`
+		h=`echo $map | sed 's|.*varcope\([0-9]*\)\.nii\.gz|\1|'`
+		[ $v ]&& cp -p $map $OUTD/copes/${lname[l]}_${hname[h]}.varcope.nii.gz
+		if [ $p ]; then
+		    ppheight=$(awk '/PPheights/ {print $(1 + '$h')}' $SOURCE/design.con)
+		    lcon=$(cat $SOURCE/cope$l.feat/design.lcon)
+		    scalingfactor=$(echo | awk '{print 100 * '$lcon' * '$ppheight' }')
+		    fslmaths $map -mul $scalingfactor -div $SOURCE/mean_func -mul $scalingfactor -div $SOURCE/mean_func $OUTD/pctSC/${lname[l]}_${hname[h]}.pSCvar.nii.gz
+		fi
+	    fi
+	done
+
+	rmdir $OUTD/{zstats,randomise,copes,pctSC} 2> /dev/null
+
+    else
+	echo "$SOURCE was not mined"
+	exit 0
+    fi
+
+### FOR ***LOWER*** LEVEL ANALYSIS
+else   
+    ### PUT CONTRAST NAMES FROM LOWER INTO AN ARRAY
+    lname=("" `grep 'conname_real' $SOURCE/design.fsf | sed 's|.*\"\(.*\)\"|\1|' | sed -e 's|\ |_|g' -e 's|>|-|g' -e 's|<|-lt-|g' -e 's|&|+|'`)
+    
+    ### ASK PERMISSION TO CONTINUE
+    echo "SOURCE DIRECTORY: $SOURCE (lower level)"
+    echo "OUTPUT DIRECTORY: $OUTD"
+    echo "NAMING FOR ZSTATS:"; n=1; for i in ${lname[*]}; do echo $n $i; let n++; done
+
+    if [ $INTERACT ]; then 
+	echo
+	read -n 1 -s -p "continue? [y/n]  " ans
+	echo
+    fi
+
+    ### PROCEED IF DESIRED
+    if [ ! $INTERACT ]||[ "X`echo $ans | tr [a-z] [A-Z]`" = "XY" ]; then
+	echo ... EXTRACTING STATMAPS
+	mkdir -p $OUTD/{zstats,copes,pctSC}
+
+	[ $z ]&& mkdir -p $OUTD/zstats
+	[ $z ]&& for map in `ls $SOURCE/stats/zstat*nii.gz`; do
+	    l=`echo $map | sed 's|.*zstat\([0-9]\{1,2\}\)\.nii\.gz|\1|'`
+	    cp -p $map $OUTD/zstats/${lname[l]}.nii.gz
+	done
+	
+	[ $c ]&& mkdir -p $OUTD/copes
+	[ $c ]||[ $p ]&& for map in `ls $SOURCE/stats/cope*nii.gz`; do
+	    l=`echo $map | sed 's|.*cope\([0-9]\{1,2\}\)\.nii\.gz|\1|'`
+	    [ $c ]&& cp -p $map $OUTD/copes/${lname[l]}.cope.nii.gz
+	    if [ $p ]; then 
+		ppheight=$(awk '/PPheights/ {print $(1 + '$l')}' $SOURCE/design.con)
+		scalingfactor=$(echo | awk '{print 100 * '$ppheight'}')
+		fslmaths $map -mul $scalingfactor -div $SOURCE/mean_func $OUTD/pctSC/${lname[l]}.pSC.nii.gz
+	    fi
+	done
+
+	[ $v ]&& mkdir -p $OUTD/copes 2> /dev/null
+	[ $v ]||[ $p ]&& for map in `ls $SOURCE/stats/varcope*nii.gz`; do
+	    l=`echo $map | sed 's|.*varcope\([0-9]\{1,2\}\)\.nii\.gz|\1|'`
+	    [ $c ]&& cp -p $map $OUTD/copes/${lname[l]}.varcope.nii.gz
+	    if [ $p ]; then
+		ppheight=$(awk '/PPheights/ {print $(1 + '$l')}' $SOURCE/design.con)
+		scalingfactor=$(echo | awk '{print 100*'$ppheight'}')
+		fslmaths $map -mul $scalingfactor -div $SOURCE/mean_func -div $OUTD/pctSC/${lname[l]}.pSCvar.nii.gz
+	    fi
+	done
+	
+	cp -p $SOURCE/example_func.nii.gz $OUTD
+
+	rmdir $OUTD/{zstats,copes,pctSC} 2> /dev/null
+    else
+	echo "$SOURCE was not mined"
+	exit 0
+    fi
+fi    
+
+
+### DESIGNS
+if [ $DESIGNS ]; then
+    echo ... COPYING DESIGN FILES
+    case "`fsfinfo -level $SOURCE`" in
+	"1") 
+	    cp $SOURCE/design.fsf $OUTD/design.fsf
+	    cp $SOURCE/design.png $OUTD/design.png
+	    ;;
+	"2") 
+	    cp $SOURCE/design.fsf $OUTD/higher_design.fsf
+	    cp $SOURCE/design.png $OUTD/higher_design.png
+	    cp `fsfinfo -1i $SOURCE`/design.fsf $OUTD/lower_design.fsf
+	    cp `fsfinfo -1i $SOURCE`/design.png $OUTD/lower_design.png
+	    ;;
+	"3")
+	    cp $SOURCE/design.fsf $OUTD/higher_design.fsf
+	    cp $SOURCE/design.png $OUTD/higher_design.png
+	    cp `fsfinfo -1i $SOURCE`/design.fsf $OUTD/intermediate_design.fsf
+	    cp `fsfinfo -1i $SOURCE`/design.png $OUTD/intermediate_design.png
+	    cp `fsfinfo -1l $SOURCE`/design.fsf $OUTD/lower_design.fsf
+	    cp `fsfinfo -1l $SOURCE`/design.png $OUTD/lower_design.png
+	    ;;
+	"*")
+	    echo "ERROR: sorry, not programmed to extract design files from more-than-4-level analyses" >&2
+	    ;;
+    esac
+
+fi
+
+
+
+
+### POST PROCESSING
+# prepare inversion commands
+for map in $OUTD/*/*.nii.gz; do
+    echo fslmaths $map -mul -1 `echo $map | sed 's|\(.*\)\(\.[^.]*\.nii\.gz\)|\1_neg\2|'`
+done > $WD/inversions.lst
+
+# run through post processes as desired
+if [ $INVERT ]; then
+    echo ... INVERTING STATMAPS
+    qup --fg --l $OUTD/logs --a 100 $WD/inversions.lst > /dev/null
+fi
+if [ $CLUSTER ]&&[ $z ]; then
+    echo ... GENERATING CLUSTER REPORTS
+    # if negative maps don't exist and haven't been made by mine4stats, make them now for the purpose of cluster reports
+    if [ ! $INVERT ] && [ `ls $OUTD/zstats/*_neg.zstat.nii.gz 2> /dev/null | wc -l` -eq 0 ]; then
+	if [ ! $NO_INVERTING ]; then
+	    for map in $OUTD/zstats/*.zstat.nii.gz; do
+		echo fslmaths $map -mul -1 `echo $map | sed 's|\(.*\)\(\.[^.]*\.nii\.gz\)|\1_neg\2|'`
+	    done > $WD/zstat_inversions.lst
+	    qup --fg --l $OUTD/logs --a 100 $WD/zstat_inversions.lst > /dev/null
+	    CLEANUP=set
+	fi
+    fi
+
+    cd $OUTD/zstats
+    clusterall $clusterall_args
+    cd $HERE
+
+    # clean up if necessary
+    [ $CLEANUP ] && rm $OUTD/zstats/*_neg.zstat.nii.gz
+fi
+if [ $MULTITHRESH ]; then
+    echo ... GENERATING MULTI-THRESHOLDED MAPS
+    for map in $OUTD/zstats/*.zstat.nii.gz; do
+	echo clusterthreshes `basename $map` -m # $clusterthreshes_args
+    done > $WD/clusterthreshes_commands.lst
+    qup --fg -wd $OUTD/zstats --l $OUTD/logs --a 50 $WD/clusterthreshes_commands.lst > /dev/null
+
+    mkdir $OUTD/multi-thresholded_zstats
+    mv $OUTD/zstats/*.zstat.corrections{,.nii.gz} $OUTD/multi-thresholded_zstats
+fi
+if [ $THRESHOLD ]; then
+    echo ... GENERATING THRESHOLDED MAPS
+    for map in $OUTD/zstats/*.zstat.nii.gz; do
+	echo clusterthresh $map $clusterthresh_args `[ $INVERT ] && echo -pos`
+    done > $WD/clusterthresh_commands.lst
+    qup --fg --l $OUTD/logs --a 100 $WD/clusterthresh_commands.lst > /dev/null
+    
+    mkdir $OUTD/thresholded_zstats
+    mv $OUTD/zstats/*.zstat.clusters.nii.gz $OUTD/thresholded_zstats
+fi
+if [ $MAXMASK ]; then
+    echo ... GENERATING MAX MASKS
+    for map in $OUTD/*/*.nii.gz; do
+	echo mkmaxmasks $map $mkmaxmasks_args `[ $INVERT ] && echo -pos`
+    done > $WD/maxmask_commands.lst
+    qup --fg --l $OUTD/logs --a 100 $WD/maxmask_commands.lst > /dev/null
+fi
+
+
+### generate README
+[ $README ] && for i in loop_just_for_output; do
+    echo -n "NAME:                   "
+    echo $OUTD
+    
+    echo -n "LOCATION ON DREAM:      "
+    readlink -f $OUTD
+
+    echo -n "DATE CREATED:           "
+    date
+    
+    echo -n "FSL VERSION:            "
+#    grep Release /usr/share/fsl/doc/fsl/licence.html | cut -d, -f2
+    (fsfinfo -version $SOURCE; fsfinfo -lversion $SOURCE) | sort -n | uniq | tr '\n' ' '
+    echo
+    
+    echo "DESCRIPTION:            "
+    
+    echo "COMMENTS:               "
+    
+    echo -n "NUMBER OF INPUTS:       "
+    fsfinfo -n $SOURCE
+    
+    echo "CONTRAST NOTATION:      "
+    
+    
+    echo -n "FILES:                  "
+    echo $SOURCE
+    
+    echo "PROBLEMS/ISSUES:        "
+    
+    echo  -n "USER:                   "
+    whoami
+done > $OUTD/README.txt
+
+echo ... COMPLETED $OUTD
+
+
+
+exit 0
+
+

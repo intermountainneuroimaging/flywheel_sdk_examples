@@ -1,0 +1,24 @@
+studypath=/path/to/results/feat/sub-*/ses-*/*.feat/reg_standard/stats/*.csv
+
+# Step 1: get descriptors from studypath
+echo "subject" > rm.subs.txt
+echo "session" > rm.ses.txt
+echo "model" > rm.model.txt
+echo "copenum" > rm.cope.txt
+echo "method" > rm.method.txt
+ls $studypath | cut -d'/' -f9 >> rm.subs.txt
+ls $studypath | cut -d'/' -f10 >> rm.ses.txt
+ls $studypath | cut -d'/' -f11 >> rm.model.txt
+ls $studypath | cut -d'/' -f14 | cut -d'.' -f1 >> rm.cope.txt
+ls $studypath | cut -d'/' -f14 | cut -d'.' -f3 >> rm.method.txt
+
+paste -d ',' rm.subs.txt rm.ses.txt rm.model.txt rm.cope.txt rm.method.txt > rm.output.txt
+
+# Combine all CSVs and remove the header from all but the first file
+(first_file=$(ls $studypath | head -n 1); 
+cat $first_file > combined.csv;
+tail -q -n +2 $(ls $studypath | grep -v "^$first_file$") >> rm.combined.csv)
+
+paste -d ',' rm.output.txt rm.combined.csv > out.csv
+
+rm rm*

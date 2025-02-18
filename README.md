@@ -1,5 +1,18 @@
-# INC Flyhweel SDK Repo
+# outline for Landing page....
 
-Contained here are example Flywheel SDK code to get you started interacting with Flywheel programatically.
+1. welcome to flywheel sdk (links)
 
-MORE TO COME!!
+2. how to get started (conda enviornment with python 3.9 or above, pip requirements.txt OR if CU Boulder user, follow instructions to a environment managed by inc)
+
+3. Why use Flywheel sdk -- what is easier
+
+4. basic navigation and getting started with SDK (use Flywheel examples page)
+
+5. idea of object ids -- really useful in SDK
+
+6. Whats contained here...
+
+7. How to use it...
+
+8. Looking for More! -- useful resources flywheel gitlab hiearchy curator examples, our other gear examples, flanker tutorial, others?
+

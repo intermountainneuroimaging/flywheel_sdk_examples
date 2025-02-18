@@ -1,0 +1,302 @@
+#!/bin/bash
+# Author: Luka Ruzic
+
+# using this array makes the different atlases easier to deal with
+ATLAS_DECODER=(\
+"just need something--anything--here to make the array 1-indexed" \
+"Harvard-Oxford Cortical Structural Atlas" \
+"Harvard-Oxford Subcortical Structural Atlas" \
+"JHU ICBM-DTI-81 White-Matter Labels" \
+"JHU White-Matter Tractography Atlas" \
+"Juelich Histological Atlas" \
+"MNI Structural Atlas" \
+"Oxford Thalamic Connectivity Probability Atlas" \
+)
+
+
+usage() {
+    {
+	echo "University of Colorado, Boulder (Banich lab)"
+	echo "Usage: clusters <Zstat_map> [options]"
+	echo
+	echo "Options:"
+	echo "  -z <Zthr>       clustering will be done with a voxelwise Z threshold of <Zthr> (default: 2.58)"
+	echo "  -v <Vthr>       only clusters with <Vthr> or more voxels are reported (default: 154)"
+	echo "  -o <filename>   will output to <filename>.csv (DEFAULT: cluster_report_<Zstat_map>_z<Zthr>_v<Vthr>.csv)"    
+	echo "  -neg            include negative intensities (DEFAULT: only positive intensities)"
+	echo "  -lm             generate lines for local maxima"
+	echo "  -d <mm>         only report local maxima separated by <mm> (cluster's --peakdist=<mm> option) (DEFAULT: 0)"
+	echo "  -c <6|18|26>    change which voxels count as connected (in terms of how many count) (cluster's --connectivity=<n> option) (DEFAULT: 26)"    
+	echo "  -icbm           use ICBM (Lancaster) coordinate conversion to Talairach space (DEFAULT: Brett conversion)"
+	echo "  --no-naming     do not attempt to generate region names (MUCH faster)"
+	echo "  -a [<p>%] [<atlas code>][,<atlas code>][...]"
+	echo "       append a field containing the readout from an FSL atlas"
+	echo "       if <p>% is given, only report areas that are more than <p>% probable"
+	echo "       if no <atlas code> is given, report from ${ATLAS_DECODER[1]} and ${ATLAS_DECODER[2]}"
+	echo "       (example argument: -a 25% 1,2,4)"
+	echo "         ATLAS CODES:"
+	for (( i=1; i<${#ATLAS_DECODER[*]} ; i++ )); do echo "            $i: ${ATLAS_DECODER[i]}"; done
+# Hidden Options:
+# in order to keep all the clusters commands in a clusterall from overwriting each other to the no_clusters file
+# clusters will look for a --no_clusters_file <file> option so that it can write them all independently, to be concatenated afterwards by clusterall
+
+#    echo "     -odir <dir>      place output files in <dir>"    # this is not publicly viewable because it is only designed for interaction with clusterall
+
+	echo
+	echo "Description:"
+	echo "  -generates a cluster report for an entire zstat map"
+	echo "  -report includes for every cluster of voxels above the zthreshold:"
+	echo "    -region name (actually the nearest gray matter on a Talairach atlas)"
+	echo "    -Brodmann Area number"
+	echo "    -max Z statistic"
+	echo "    -number of voxels"
+	echo "    -MNI voxel coordinates of the Max Z"
+	echo
+	echo "Note: will work on lower levels, BUT ONLY inside the <analysis>.feat/stats directory"
+	echo "Tip: to generate reports for all the Zstat maps in a directory, use clusterall"
+	echo
+    } >&2
+
+    #exit 1
+}
+
+mktempfail() {
+    echo "ERROR: failed to create temporary file with mktemp; exiting" >&2
+    #exit 1
+}
+
+
+### PARSE ARGUMENTS
+if [ ! $1 ]; then
+    usage
+fi
+
+# defaults
+Zthr=2.58   # default Z threshold
+VOXthr=154   # smallest number of voxels to report on
+# read arguments
+while [ $1 ]; do
+    if [ $1 == "-z" ]&&[ $2 ]; then
+	Zthr=$2
+	shift 2
+    elif [ $1 == "-v" ]&&[ $2 ]; then
+	VOXthr=$2
+	shift 2
+    elif [ $1 == "-o" ]&&[ $2 ]; then
+	FOUT=${2%.csv}.csv
+	shift 2
+    elif [ $1 == "-neg" ]; then
+	NEG=set
+	shift
+    elif [ `imtest $1` -eq 1 ]; then  # imtest is FSL's image test
+	if [ $zstat ]
+	then  # one image has already been given
+	    echo "ERROR: TOO MANY INPUTS" >&2
+	    usage
+	fi
+	zstat=$1
+	shift
+    elif [ $1 == "-lm" ]; then
+	RUNLOCALMAXIMA=1
+	shift
+    elif [ $1 == "-d" ]&&[ $2 ]; then
+	EXTRAOPTS+=" --peakdist=$2"
+	shift 2
+    elif [ $1 == "-c" ]&&[ $2 ]; then
+	EXTRAOPTS+=" --connectivity=$2"
+	shift 2
+    elif [ $1 == "-icbm" ]; then
+	ICBM="-icbm"
+	shift
+    elif [ "$1" == "-a" ]; then
+	### look for percentage
+	if [ $2 ]&&[[ ! "$2" =~ ^- ]]&&[[ "$2" =~ %$ ]]; then
+	    ATLAS_PCT="-p ${2%\%}"
+	    shift
+	fi
+	
+	### look for atlas codes
+	if [ $2 ]&&[[ ! "$2" =~ ^- ]]; then
+	    ATLAS_CODES+=(${2//,/ })
+            shift 2
+	else
+	    ATLAS_CODES=(1 2)
+	    shift
+	fi
+    elif [ $1 == "-odir" ]&&[ $2 ]; then
+	if [ ! -d $2 ]; then
+	    echo "cannot find $2"
+	else
+	    ODIR=$2"/"
+	    shift 2
+	fi
+    elif [ $1 == "--no-naming" ]; then
+	NONAME=set
+	shift
+    elif [ "$1" == "--no_clusters_file" ]; then
+	NOCLUSTERFILE=$2
+	shift 2
+    else
+	echo "UNRECOGNIZED INPUT: $1" >&2
+	usage
+    fi
+done
+
+
+for i in ${ATLAS_CODES[*]}
+do  # check for bad atlas codes
+    if [ $i -ge ${#ATLAS_DECODER[*]} ]; then
+	echo "ERROR: bad atlas code: $2" >&2
+	let e++
+    fi
+done
+[ $e ] && usage
+
+### SET UP
+MNI_BRAIN=`findMNI`
+WD=`mktemp -d -p $SLURM_SCRATCH` || mktempfail
+HERE=$PWD
+[ $NOCLUSTERFILE ] || NOCLUSTERFILE=${HERE}/${ODIR}no_clusters.txt
+
+
+# discover level (based on image dimensions)
+[ `printf "%.0f" $(fslval $zstat pixdim3)` -eq 2 ] && LEVEL=2 || LEVEL=1
+
+### NAME OUTPUTFILE (if necessary)
+if [ ! $FOUT ]; then
+    if [ $LEVEL -eq 1 ]; then
+	FOUT="${HERE}/${ODIR}cluster_report_${zstat%.nii.gz}_z${Zthr}_v${VOXthr}.csv"
+    else                                                        # we're dealing with a higher level (BY FAR the most common usage)
+	# if clusters is being run inside a gfeat, include the cope number
+	if [ `echo $HERE | grep -c gfeat` -eq 1 ]; then
+	    copeNum=`pwd | grep -o 'cope[0-9]\{1,2\}'`
+	    FOUT="${HERE}/${ODIR}cluster_report_${copeNum}_${zstat%.nii.gz}_z${Zthr}_v${VOXthr}.csv"
+	else
+	    FOUT="${HERE}/${ODIR}cluster_report_${zstat%.nii.gz}_z${Zthr}_v${VOXthr}.csv"
+	fi
+    fi
+fi
+
+### DO CLUSTERING
+if [ $LEVEL -eq 1 ]
+then  # prepare argument for FLIRT (registration from scanner space to MNI space)
+    regopts="-x ../reg/example_func2standard.mat --stdvol=$MNI_BRAIN"
+fi
+
+# get cluster information for positive intensities
+cluster -i $zstat -t $Zthr $regopts --mm --olmax=$WD/maxima -n 902629 $EXTRAOPTS \
+    | awk 'NR>1 && $2>='$VOXthr' {print $2,$3,$4,$5,$6,$1}' > $WD/clusters
+
+# get the first and last index numbers
+posindexrange=($(awk '{i=$6} NR==1 {print i} END {print i}' $WD/clusters))
+if [ $posindexrange ]; then
+    # prune maxima
+    awk 'NR==1 {next} $1>='${posindexrange[1]}' {print $0}' $WD/maxima > $WD/maxima_pruned
+    mv $WD/maxima{_pruned,}
+else
+    posindexrange=0
+fi
+
+if [ $NEG ]; then
+    # rename positive files
+    mv $WD/clusters{,_pos}
+    mv $WD/maxima{,_pos}
+
+    # invert statmap
+    fslmaths $zstat -mul -1 $WD/negzstat
+    
+    ## generate information on negative intensities
+    # (adjust indexes by adding posindexrange[1] (highest index from positive map) so that they don't overlap with indexes from positive clusters)
+    cluster -i $WD/negzstat -t $Zthr $regopts --mm --olmax=$WD/maxima_neg -n 902629 $EXTRAOPTS \
+	| awk 'NR>1 && $2>='$VOXthr' {print $2, $3*-1, $4, $5, $6, $1+'${posindexrange[0]}'}' > $WD/clusters_neg
+
+    # get the first and last index numbers
+    negindexrange=(`awk '{i=$6} NR==1 {print i} END {print i}' $WD/clusters_neg`)
+    if [ $negindexrange ]; then
+	# prune/adust maxima
+	awk 'NR==1 {next} {$1+='${posindexrange[0]}'} $1>='${negindexrange[1]}' {print $1,$2*-1,$3,$4,$5}' $WD/maxima_neg > $WD/maxima_neg_pruned
+	mv $WD/maxima_neg{_pruned,}
+    fi
+
+    # combine clusters files
+    cat $WD/clusters_* | sort -n -k1 -r > $WD/clusters
+    # combine (relevant lines of) maxima files
+    while read size maxz x y z i; do awk '$1=='$i'' $WD/maxima*[^w]; done < $WD/clusters > $WD/maxima
+fi
+
+
+### GENERATE REPORT
+if [ `cat $WD/clusters | wc -l` -ne 0 ]; then
+    # make header
+    # standard columns
+    stdcols="Region,BA,Max Z,vox,x,y,z"
+	
+    # atlas titles
+    for a in ${ATLAS_CODES[*]}; do
+	atlas_header+=",${ATLAS_DECODER[a]}"
+    done
+    # if reporting local maxima, include cluster index column so that maxima can easily be matched up with their cluster peaks
+    [ $RUNLOCALMAXIMA ] && indexcol=",index"
+
+    #PRINT
+    echo ${stdcols}${atlas_header[*]}${indexcol} > $FOUT
+    
+
+    ### MAKE A LINE OF REPORT PER CLUSTER FOUND
+    while read voxels Z x y z i; do
+	# save number of voxels
+	voxels[i]=$voxels
+	
+	# query tal daemon
+	[ $NONAME ] || tdfield=(`mm2label $x $y $z $ICBM`)
+	# parse output
+	tdlabel[i]="${tdfield[0]}(${tdfield[1]})"
+	BA[i]=${tdfield[2]}
+ 	# output to report
+	unset atlas_labels
+	for a in ${ATLAS_CODES[*]}; do
+	    atlas_labels+=",$(mm2label $x $y $z $ICBM -a $a $ATLAS_PCT)"
+	done
+	
+	[ $RUNLOCALMAXIMA ] && index=",         cluster$i"
+
+	# PRINT
+	echo "${tdlabel[i]},${BA[i]:-N/A},$Z,$voxels,$x,$y,$z${atlas_labels}${index}" >> $FOUT
+    done < $WD/clusters
+    
+    if [ $RUNLOCALMAXIMA ]; then
+	# print more header stuff
+	printf "\n\n***LOCAL MAXIMA***\n" >> $FOUT    
+	echo "Region,BA,Max Z,vox,x,y,z${atlas_header},cluster affiliation" >> $FOUT
+	
+        ### REPORT ON LOCAL MAXIMA
+	while read i Z x y z; do
+	    # get TD labeling
+	    [ $NONAME ] || tdfield=(`mm2label $x $y $z $ICBM`)
+	    [ ${tdfield[0]} ] && maxtdlabel="${tdfield[0]}(${tdfield[1]})" || maxtdlabel="no label"
+
+	    # get FSL atlas labeling
+	    unset atlas_labels
+	    for a in ${ATLAS_CODES[*]}; do
+		atlas_labels+=",`mm2label $x $y $z $ICBM -a $a $ATLAS_PCT`"
+	    done
+
+            # PRINT
+	    echo "$maxtdlabel,${tdfield[2]},$Z,${voxels[i]},$x,$y,$z$atlas_labels,            cluster$i (${tdlabel[i]})" >> $FOUT
+	done < $WD/maxima
+    fi
+    
+    echo "generated $FOUT"
+    
+else ### THERE ARE NO CLUSTERS, ADD TO LIST OF CLUSTERLESS MAPS
+
+    if [ $copeNum ]; then
+	echo "no clusters in ${copeNum}, ${zstat}"
+	echo "no clusters in ${copeNum}, ${zstat}" >> $NOCLUSTERFILE
+    else
+	echo "no clusters in ${zstat}"
+	echo "no clusters in ${zstat}" >> $NOCLUSTERFILE
+    fi
+fi
+
+# exit 0

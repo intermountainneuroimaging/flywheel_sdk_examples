@@ -1,0 +1,28 @@
+#!/bin/bash
+gsumm=${1:-nback_15subj.summary}
+odir=$gsumm/overlays
+mkdir -p $odir
+cd $odir
+sdir1=slices1
+sdir2=render1
+rm -rf $sdir1 $sdir2
+mkdir -p $sdir1
+efunc=$FSLDIR/data/standard/MNI152_T1_2mm_brain.nii.gz
+echo $PWD
+for zstat in ../zstats/*.zstat.nii.gz; do
+    overlay_fname=`basename $zstat | sed -e 's,.zstat,,g'`
+    overlay 1 1 $efunc -A $zstat 2.58 5.0 $zstat -2.58 -5.0  $sdir1/$overlay_fname
+done
+
+if [ -d ../randomise ] ; then
+    for corrp in ../randomise/*.nii.gz; do
+        overlay_fname=`basename $corrp `
+        overlay 1 1 $efunc -A $corrp 2.58 5.0 $corrp -2.58 -5.0  $sdir1/$overlay_fname
+    done
+fi
+slicesdir $sdir1/*nii.gz
+rm slicesdir/grot?.png
+mv slicesdir $sdir2
+cp -p $FSLDIR/etc/luts/ramp.gif $sdir2
+cp -p $FSLDIR/etc/luts/ramp2.gif $sdir2
+cd ..

@@ -1,0 +1,92 @@
+#!/bin/bash
+#
+# SYNTAX
+#    getlocalmax4 summary_stats_dir peakdist n
+#
+# DESCRIPTION
+# In a summary_stats directory, generate a new local max subdirectory named
+#    localmaxFSLTalHarvardJuelich_dist${peakdist}mm_n${n}
+#
+# Using the thresh_tstats as input, combine the FSL cluster info with
+# local max info per tstats, saving as maximax${i}.csv with these columns from
+# the cluster call:
+#   ClusterIndex,Voxels,MAXX(mm),MAXY(mm),MAXZ(mm)
+#
+# and these columns from calls to mm2label:
+#    TalairachFSLAtlas
+#    Harvard-OxfordCortical
+#    Harvard-OxfordSubcortical
+#    JuelichHistologicalAtlas
+#
+# The summary_stats directory must be specified.
+# If peakdist (mm) is not specified, 12 is the default.
+# If n (number of local maxima per cluster) is not specified, 5 is the default.
+#
+# KLP
+# 11-20-2015
+# 01-14-2016 fix bug to pay attention to peakdist input argument
+#
+# 01-21-2016 updated from getlocalmax to getlocalmax2
+# 01-21-2016 base all file names in output upon threshholded named inputs
+# 01-27-2016 skip fdr_oneminusp files in thresh_tstats
+#
+# 01-18-2016 updated from getlocalmax2 to getlocalmax3
+#            reference FSL Talairach atlas instead of Talairach Daemon
+#            change output dir name from localmaxima to localmaxFSLTalHarvard
+#
+# 03-16-2016 updated from getlocalmax3 to getlocalmax4
+#            add column for reference to FSL Juelich Atlas
+#_______________________________________________________________________________
+#
+statsdir=${1:-$PWD/summary_stats}
+peakdist=${2:-12}
+n=${3:-5}
+here=$PWD
+cd $statsdir
+if [ ! -d thresh_tstats ]; then
+    echo "exit ... no thresh_stats subdirectory"
+    exit 7
+fi
+let nstat="`ls -1 thresh_tstats/thresh*.nii.gz | wc -l`"
+if [ $nstat -lt 1 ]; then
+   echo "exiting... no thresholded tstats"
+   exit 7
+fi
+maxdir=localmaxFSLTalHarvardJuelich_dist${peakdist}mm_n${n}
+mkdir -p $maxdir
+cd $maxdir
+for fname in ../thresh_tstats/*.nii.gz; do
+    name=`basename $fname | sed -e 's,.nii.gz,,g'`
+    let nskip="`echo $name | grep -c fdr_oneminusp`"
+    if [ $nskip -gt 0 ]; then
+        continue
+    fi
+    clustername=cluster_${name}.txt
+    localname=localmax_${name}.txt
+    listname=list_${name}.csv
+    coordname=coord_${name}.csv
+    queryname=query_${name}.csv
+    maximaname=maxima_${name}.csv
+    cluster -i $fname -t 1 -n $n --peakdist=$peakdist --mm --olmax=$localname > $clustername
+    sed -i 's, ,,g' $clustername
+    sed -i 's, ,,g' $localname
+    head -1 $clustername | cut -f1,2,4,5,6 | tr '\t' ',' > $listname
+    ci=`tail -n +2 $clustername | cut -f1`
+    for index in $ci; do
+        awk -v ndx=$index '$1==ndx' $clustername | cut -f1,2,4,5,6 | tr '\t' ',' >> $listname
+        awk -v ndx=$index '$1==ndx' $localname  | tr '\t' ',' >> $listname
+    done
+    tail -n +2 $listname | cut -d ',' -f3,4,5 | tr ',' ' ' > $coordname
+    echo TalairachFSLAtlas,Harvard-OxfordCortical,Harvard-OxfordSubcortical,JuelichHistologicalAtlas > $queryname
+    while read -r x y z; do
+       label1=`mm2label $x $y $z -a 8`
+       label2=`mm2label $x $y $z -a 1`
+       label3=`mm2label $x $y $z -a 2`
+       label4=`mm2label $x $y $z -a 5`
+       labels=`echo $label1,$label2,$label3,$label4 | sed -e 's,No label found!,,g'`
+       echo $labels >> $queryname
+    done < $coordname
+    paste -d ',' $listname $queryname > $maximaname
+done
+cd $here
+exit 0

@@ -1,0 +1,603 @@
+#!/bin/bash
+# Author: Luka Ruzic
+
+### NOTES
+# can we check the value of the highpass filter cutoff, smoothing kernel?
+# figure out how melodic works with FEAT and fsf's
+# insist on FLAME 1+2 (for higher levels?)?
+# what to say about slice timing correction?
+# improve model printing?  use fsfinfo?
+# add version checking for higher levels
+
+# 02-11-2014 KLP make ascending slice order the default
+# 03-05-2014 KLP allow BBR text for dof on main structural image registration
+# 03-02-2015 KLP version to skip deriv in listing contrasts
+
+usage() {
+    {
+	echo "University of Colorado"
+	echo "Usage: $0 <design.fsf> | <analysis.(g)feat>" # [<subjects.lst>]"
+	echo
+	echo "Description: summarizes a Feat Setup File (an \"fsf\" or \"design\" file)"
+	echo "             checks for known potential problems and irregularities"
+	echo
+	echo "   Options:"
+	echo "      -s    runs in silent mode (only prints the number of potential problems)"
+	echo "      -S    runs in sensitive silent mode (prints the sum of potential problems and irregularities)"
+	echo "      -du   when checking higher-levels, WILL print disk usage of input directories (time consuming)"
+	echo "      -q    when checking higher-levels, WILL NOT make sure input analyses produced viable stat maps"
+	echo "                (this is the most thorough-going check, but it can take a few minutes for a large analysis)"
+    } >&2
+
+    exit 1
+}
+    
+mktempfail() {
+    echo "ERROR: mktemp failed" >&2
+    exit 1
+}
+
+# make a temporary working directory
+WD=$(mktemp -d) || mktempfail
+
+# small function to implement silent mode (and tab all messages)
+schmecho() {    
+    [ ! $SILENT ] && echo "   "$*
+}
+
+rm searchpatterns.txt 2> /dev/null     # for debugging
+
+# small function to parse design file
+fsf_read() {
+    if [ $1 == "-d" ]; then
+	d=$2
+	shift 2
+    else
+	d=$DESIGN
+    fi
+    
+    [ $DEBUG ] && echo "search pattern: $1" >> searchpatterns.txt     # for debugging
+    awk '$1=="set" && $2 ~ /'"$1"'/ {print $3}' $d | sed -e 's|"$||' -e 's|^"||'
+}
+
+# small function to standardize problem-reporting
+problem() {
+    [ ! $SILENT ] && echo "***POTENTIAL PROBLEM*** $*"
+    let problems++
+}
+
+# small function to standardize irregularity-reporting
+irreg() {
+    [ ! $SILENT ] && echo "***IRREGULARITY***: $*"
+    let irregs++
+}
+
+### PARSE ARGUMENTS
+THOROUGH=set
+while [ $1 ]; do
+    if [[ "$1" =~ fsf$ ]]; then
+	DESIGN=$1
+	shift
+    elif [[ "$1" =~ \.g{0,1}feat/{0,1}$ ]]; then
+	DESIGN=$1/design.fsf
+	shift
+    elif [ "$1" == "-du" ]; then
+	DU=set
+	shift
+    elif [ "$1" == "-q" ]; then
+	unset THOROUGH
+	shift
+    elif [ "$1" == "-s" ]; then
+	SILENT=set
+	shift
+    elif [ "$1" == "-S" ]; then
+	SILENT=set
+	SUM=set
+	shift
+    elif [ "$1" == "--debug" ]; then
+	DEBUG=set
+	shift
+    else
+	echo "UNRECOGNIZED OPTION: $1" >&2
+	usage
+    fi
+done
+
+### ERROR CHECKING
+if [ ! $DESIGN ]; then
+    echo "ERROR: no design given" >&2
+    usage
+fi
+if [ ! -r $DESIGN ]; then
+    echo "ERROR: $DESIGN is not a readable design" >&2
+    exit 1
+fi
+
+
+### MAIN
+# check for melodic
+if [ $(fsf_read inmelodic) -eq 1 ]; then
+    echo "SORRY: fsfcheck doesn't know how to interpret melodic ICA designs" >&2
+    exit 1
+fi
+
+# split into lower and higher levels
+if [ $(fsfinfo -t $DESIGN) -eq 1 ]
+then ### LOWER LEVEL ###
+    # parse general info
+    subname=$(basename $(dirname $(fsfinfo -o $DESIGN)))     # (assume: .../subject_name/analysis.feat)
+
+
+    schmecho "-----------------OVERVIEW--------------------------"
+    outputdir=$(fsfinfo -o $DESIGN)
+    # read version from featlib.tcl (it's on a line that starts "set fmri(version)" followed by something containing a number and a period)
+    currentv=$(grep "set fmri(version)" $FSLDIR/tcl/featlib.tcl | awk '$3 ~ /\./ && $3 ~ /[0-9]/ {print $3}')
+    desiredv=$(fsfinfo -version $DESIGN)
+
+    schmecho "analysis: FEAT lower-level"
+    schmecho "FEAT version: $desiredv"
+    if [ ! $currentv ]; then
+	problem "FEAT may not exist in this environment"
+    elif [ "$desiredv" != "$currentv" ]; then
+	problem "is the wrong version of FEAT running? (running version appears to be $currentv)"
+    fi
+
+    schmecho "subject: $subname"
+    schmecho "output directory: $outputdir"                                                                                                 
+    if [ ! $outputdir ]; then
+	problem "this analysis is nameless"
+    elif [ -d $outputdir ]; then
+       schmecho "(directory already exists (FSL overwriting is $([ $(fsf_read overwrite_yn) -eq 0 ] && echo off || echo on)))"
+    fi
+
+    [ $(fsf_read featwatcher_yn) -eq 1 ] && irreg "progress watcher is enabled (this option can be annoying)"
+    [ $(fsf_read sscleanup_yn) -eq 1 ] && irreg "set to clean up first-level standard space images (we generally don't do this)"
+    schmecho "---------------------------------------------------"
+    schmecho
+
+
+    #schmecho "-----------------INPUTS----------------------------"
+    #infile=$(fsfinfo -i $DESIGN)
+    #infile_sub=$(basename $(dirname $infile))   # assume that 4D input file is .../subject_number/inputfile.nii.gz
+    #expected_vols=$(fsfinfo -vols $DESIGN)
+    #input_vols=$(fslval $infile dim4)
+
+    #schmecho "input file: $infile"
+    #[ "$infile_sub" != "$subname" ] && problem "input file does not belong to this subject ($subname)"
+    #schmecho "expecting $expected_vols total volumes"
+    #schmecho "expected TR: $(fsfinfo -tr $DESIGN) (NOTE: this can only be checked against notes/DICOM headers/etc)"
+    #if [ $(imtest $infile) -ne 1 ]; then
+	#problem "input file is problematic: $infile"
+    #else
+	#[ $input_vols -ne $expected_vols ] && problem "input file has the wrong number of volumes (${input_vols})"
+    #fi
+    #schmecho "---------------------------------------------------"
+    #schmecho
+
+
+    schmecho "-----------------PREPROCESSING---------------------"
+    #ndelete=$(fsf_read ndelete)
+    #[ $ndelete -ne 0 ] && irreg "set to delete $ndelete volumes from the beginning (usually done outside of FEAT)"
+    #[ $(fsfinfo -mc $DESIGN) -eq 1 ] && irreg "motion correction is ON (usually done outside of FEAT)"
+    #schmecho "B0 unwarping is $([ $(fsf_read regunwarp_yn) -eq 1 ] && echo ON || echo OFF)"
+    #stc="$(fsfinfo -stc $DESIGN)"
+    #if [ "$stc" == "none" ]; then
+##	irreg "slice timing correction is OFF (we generally use it)"
+	#irreg "slice timing correction is OFF (we sometimes use it)"
+    #else
+##	[ "$stc" != "interleaved"  ] && irreg "slice timing correction is set to $stc (most of our acquisitions are interleaved)"
+	#[ "$stc" != "regular_up"  ] && irreg "slice timing correction is set to $stc (most of our acquisitions are regular ascending)"
+    #fi
+    #[ $(fsf_read bet_yn) -ne 1 ] && irreg "brain extraction is OFF (it's use is recommended)"
+    schmecho "spatial smoothing FWHM: $(fsfinfo -smooth $DESIGN)"
+    #[ $(fsf_read norm_yn) -ne 0 ] && irreg "intensity normalization is ON (not recommended by FSL)"
+    #[ $(fsf_read perfsub_yn) -ne 0 ] && irreg "perfusion subtraction is ON (we typically deal with BOLD data)"
+    [ $(fsf_read templp_yn) -ne 0 ] && irreg "lowpass temporal filtering is ON (not considered helpful by FSL)"
+    [ $(fsf_read temphp_yn) -ne 1 ] && irreg "highpass temporal filtering is OFF (we generally employ it)"
+    schmecho "high pass filter cutoff: $(fsfinfo -hpf $DESIGN)"
+    schmecho "MELODIC data exploration is $([ $(fsf_read melodic_yn) -eq 0 ] && echo OFF || echo ON)"
+    schmecho "---------------------------------------------------"
+    schmecho
+
+
+    schmecho "-----------------MODEL-----------------------------"
+    [ $(fsf_read prewhiten_yn) -ne 1 ] && irreg "prewhitening is off (typically it is desired)"
+    [ $(fsf_read motionevs) -ne 0 ] && schmecho "model includes motion parameters"
+
+    # go through model, checking for known problems and printing it out
+    evs_orig=$(fsf_read evs_orig)
+    for ((e=1;e<=evs_orig; e++)); do
+	unset evfile
+	# decode shape (note that this sets $evfile as well if shape is given by custom timing file)
+	case $(fsf_read "\(shape${e}\)") in
+	    0) shape="Square";;
+	    1) shape="Sinusoid";; 
+	    2|3) evfile="$(fsf_read "\(custom${e}\)")"; shape=${evfile/*\/subjects\//.../};;
+	    4) shape="Interaction";;
+	    10) shape="Empty";;
+	    *) shape="unrecognized (this shouldn't happen... could be a problem with fsfcheck)"
+	esac
+	# decode convolution
+	convnum=$(fsf_read "\(convolve${e}\)")
+	case $convnum in
+	    0) conv="No convolution";; 
+	    1) conv="Gaussian";; 
+	    2) conv="Gamma";; 
+	    3) conv="Double-Gamma HRF";;
+	    4) conv="Gamma basis functions";; 
+	    5) conv="Sine basis functions";; 
+	    6) conv="FIR basis functions";;
+	    7) conv="Optimal basis functions";;
+	    *) conv="unrecognized (this shouldn't happen... could be a problem with fsfcheck)"
+	esac
+	# print line
+	[ ! $SILENT ] && printf "   %-8s %26s  %s\n" "EV($e):" "($conv)" "$shape"
+	if [ $convnum -eq 1 ]||[ $convnum -eq 2 ]||[ $convnum -eq 4 ]||[ $convnum -eq 5 ]; then
+	    problem "Atypical choice of convolution: $conv"
+	fi
+
+	# check for problems
+	if [ $evfile ]; then
+	    if [ ! -r $evfile ]; then
+		problem "EV($e) is unreadable"
+	    else
+		# check for the subjects name in EV file
+		[[ ! "$evfile" =~ $subname ]] && irreg "EV($e) does not belong to subject ($subname)"
+		
+		tr=$(fsf_read "\(tr\)")
+		npts=$(fsf_read "\(npts\)")
+		coltype=($(awk 'NF==0 {next} {print NF}' $evfile | sort -n | uniq))
+
+		# check length of EV
+		if [ ${#coltype[*]} -gt 1 ]; then
+		    problem "EV($e) is irregular (not all lines have same number of columns)"
+		elif [ $coltype -eq 1 ]
+		then # 1 column EV
+		    if [ $(awk 'NF==0 {next} {n++} END {print n}' $evfile) -ne $npts ]; then
+			problem "EV($e) may not account for the correct number of volumes"
+		    fi
+		elif [ $coltype -eq 3 ]
+		then # 3 column EV
+		    if [ $(awk 'NF==0 {next} $3!=1 {n++; exit} END {print n*1}' $evfile) -eq 0 ]
+		    then  # there are no lines with a value besides 1
+			irreg "cannot check length of EV($e) (only describes ON state)"
+		    elif [ $(awk 'NF==0 {next} next_onset {if ($1!=next_onset) e++} {next_onset=$1+$2} END {print e*1}' <(awk 'NF' $evfile)) -ne 0 ]; then
+			problem "EV EV($e) has onsets that do not equal onset + duration from previous line"
+		    else 
+			if [ $(awk 'NF==0 {next} {remainder+=$2%'$tr'} END {if (remainder) print 0; else print 1}' $evfile) -eq 1 ]
+			then  # number of seconds modeled divides evenly into TRs, check accordingly
+			    [ $(awk 'NF==0 {next} {l=$1+$2} END {print l/'$tr'}' $evfile) -ne $npts ] && problem "EV($e) may not account for the correct number of volumes"
+			else  # number of seconds modeled does not divide into TRs, so check to two decimal places
+			    [[ $(awk 'NF==0 {next} {l=sprintf("%.2f",$1+$2)} END {print l/'$tr'}' $evfile) != $npts ]] && problem "EV($e) may not account for the correct number of volumes"
+			fi
+		    fi
+		fi
+
+		# check for empty or not demeaned EVs
+		if [ $(awk 'NF==0 {next} $NF<-.001 || $NF>.001 {n++; exit} END {print n*1}' $evfile) -eq 0 ]
+		then  # all values are between -.001 and .001 (effectively zero)
+		    problem "EV($e) is empty (all zeroes)"
+		elif [ $(awk 'NF==0 {next} $NF!=1 && $NF!=0 {n++; exit} END {print n*1}' $evfile) -ne 0 ]\
+                   &&[ $(awk 'NF==0 {next} {s+=$NF} END {if (s<.0001 && s>-.0001) print "demeaned"; else print "not"}' $evfile) != "demeaned" ]; then
+		    irreg "EV($e) is not 1s and 0s AND is not demeaned (it probably should be)"
+		fi
+	    fi
+	fi
+    done
+
+    # check/print contrasts
+    ncon_real=$(fsf_read ncon_real)
+    for ((c=1; c<=ncon_real; c++)); do
+	conname="$(grep "conname_real\.${c})" $DESIGN | cut -d\" -f2)"
+	[ ! $SILENT ] && printf "   %-14s " "contrast($c):"
+	[ ! $SILENT ] && printf " %5.2f   " $(for ((e=1,e2=1;e<=evs_orig;e++,e2+=2)); do fsf_read "\(con_real${c}.${e2}\)"; done)
+	schmecho "   $conname"
+	[ ! "$conname" ] && irreg "contrast $c is unnamed (this can cause problems for mine4stats)"
+    done
+    schmecho "---------------------------------------------------"
+    schmecho
+
+
+    schmecho "-----------------REGISTRATION----------------------"
+    # check out initial highres (e.g., a part_brain)
+    if [ $(fsf_read reginitial_highres_yn) == "1" ]; then
+	three_stage_reg=set
+	image=$(fsf_read initial_highres_files)
+	dof=$(fsf_read reginitial_highres_dof)
+	[ ! $SILENT ] && printf "   %3d\t%s\n" $dof "$image (initial structural image)"
+	[ $(imtest $image) -ne 1 ] && problem "initial structural image is problematic"
+	[[ ! "$image" =~ $subname ]] && problem "initial structural image does not belong to subject ($subname)"
+	[ $dof -ne 6 ] && problem "registration to initial structural should typically be done with 6 degrees of freedom"
+	
+    fi
+
+    # check out highres (e.g., full_brain)
+    if [ $(fsf_read reghighres_yn) == "1" ]; then
+	image=$(fsf_read "^highres_files")
+	dof=$(fsf_read reghighres_dof)
+###	[ ! $SILENT ] && printf "   %3d\t%s\n" $dof "$image (main structural image)"
+	[ ! $SILENT ] && printf "   %3s\t%s\n" $dof "$image (main structural image)"
+	[ $(imtest $image) -ne 1 ] && problem "main structural image is problematic"
+	[[ ! "$image" =~ $subname ]] && problem "main structural image does not belong to subject ($subname)"
+	# desired number of DOF depends on whether there was a prior stage of registration
+	if [ $three_stage_reg ]; then
+###	    [ $dof -ne 7 ] && problem "registration to main structural images should typically be done with 7 degrees of freedom"
+	    [ $dof != "BBR" ] && irreg "registration to main structural images should typically be done with BBR"
+	else
+###	    [ $dof -ne 6 ] && problem "registration to main structural images should typically be done with 6 degrees of freedom"
+	    [ $dof != "BBR" ] && irreg "registration to main structural images should typically be done with BBR"
+	fi
+    fi
+
+    # check out registration to standard template
+    if [ $(fsf_read regstandard_yn) == "1" ]; then
+	image=$(fsf_read '\(regstandard\)')
+	dof=$(fsf_read regstandard_dof)
+	[ ! $SILENT ] && printf "   %3d\t%s\n" $dof "$image (standard space image)"
+	[ $(imtest $image) -ne 1 ] && problem standard space image is problematic
+	if [ "X${image/*avg152T1_brain*/match}" != "Xmatch" ]&&[ "X${image/*MNI152_T1_2mm_brain*/match}" != "Xmatch" ]; then
+	    irreg "standard image is usually avg152T1_brain or MNI152_T1_2mm_brain"
+	fi
+	[ $dof -ne 12 ] && problem "registration to standard space should typically be done with 12 degrees of freedom"
+    fi
+    schmecho "---------------------------------------------------"
+    schmecho
+
+
+    schmecho "-----------------HIDDEN----------------------------"
+    # look for and report on any hidden options used (these are only viewable/manageable through the design.fsf and not the GUI)
+    # report on all of them to keep them from going unnoticed
+
+    image=$(fsf_read alternative_example_func)
+    if [ $image ]; then
+	schmecho "using an alternative example_func: $image"
+	[ $(imtest $image) -ne 1 ] && problem "$image is problematic"
+    fi
+    
+    image=$(fsf_read alternative_mask)
+    if [ $image ]; then
+	schmecho "using an alternative brain mask: $image"
+	[ $(imtest $image) -ne 1 ] && problem "$image is problematic"
+    fi
+    
+    image=$(fsf_read init_initial_highres)
+    if [ $image ]; then
+	schmecho "using an alternative initial structural space registration initialisation transform: $image"
+	[ $(imtest $image) -ne 1 ] && problem "$image is problematic"
+    fi
+
+    image=$(fsf_read init_highres)
+    if [ $image ]; then
+	schmecho "using an alternative structural space registration initialisation transform: $image"
+	[ $(imtest $image) -ne 1 ] && problem "$image is problematic"
+    fi
+
+    image=$(fsf_read init_standard)
+    if [ $image ]; then
+	schmecho "using an alternative standard space registration initialisation transform: $image"
+	[ $(imtest $image) -ne 1 ] && problem "$image is problematic"
+    fi
+
+    [ $(fsf_read overwrite_yn) -eq 1 ] && schmecho "overwriting is turned ON"
+    schmecho "---------------------------------------------------"
+    schmecho
+
+##########################
+##########################
+##########################
+##########################
+##########################
+
+else  ### HIGHER LEVEL ###
+    outputdir=$(fsf_read outputdir)
+    level=$(fsfinfo -level $DESIGN)
+
+    schmecho "-----------------OVERVIEW--------------------------"
+    # get version from featlib.tcl
+    currentv=$(grep "set fmri(version)" $FSLDIR/tcl/featlib.tcl | awk '$3 ~ /\./ && $3 ~ /[0-9]/ {print $3}')
+    desiredv=$(fsf_read version)
+
+    schmecho "analysis: FEAT higher-level (level $(fsfinfo -level $DESIGN))"
+    schmecho "FEAT version: $desiredv"
+    if [ ! $currentv ]; then
+	problem "FEAT may not exist in this environment"
+    elif [ "$desiredv" != "$currentv" ]; then
+	problem "is the wrong version of FEAT running? (running version appears to be $currentv)"
+    fi
+
+    schmecho "output directory: $outputdir"
+    if [ ! $outputdir ]; then
+	problem "this analysis is nameless"
+    elif [ -d $outputdir ]; then
+	schmecho "(directory already exists (FSL overwriting is $([ $(fsf_read overwrite_yn) -eq 0 ] && echo off || echo on)))"
+    fi
+
+    [ $(fsf_read featwatcher_yn) -eq 1 ] && irreg "progress watcher is enabled (this options will open up browsers, can be a nuisance)"
+    [ $(fsf_read sscleanup_yn) -eq 1 ] && irreg"set to clean up first-level standard space images (we generally don't do this)"
+    schmecho "---------------------------------------------------"
+    schmecho
+
+
+    schmecho "-----------------INPUTS----------------------------"
+    ninputs=$(fsf_read "\(multiple\)")
+    ncopeinputs=$(fsf_read ncopeinputs)
+    if [ $(fsf_read inputtype) -eq 1 ]; then
+	schmecho "inputs are $ninputs lower-level FEAT directories"
+    elif [ $(fsf_read inputtype) -eq 2 ]; then
+	schmecho "inputs are $ninputs cope images from FEAT directories"
+	irreg "this is uncommon, though not incorrect if intended"
+	COPEINPUT=set
+    else
+	problem "unrecognizable input type, design file might be broken"
+    fi
+
+    # warn if any inputs are switched off (this can be easy to overlook)
+    for ((i=1;i<=ncopeinputs;i++)); do
+	[ "X$(fsf_read "\(copeinput\.$i\)")" == "X0" ] && schmecho "NOTICE: input cope $i is not being included in the analysis"
+    done
+
+    # check to see if all inputs have the same number of copes, and that it's the same number as are expected
+    input_contrasts="`fsfinfo -icon $DESIGN 2>/dev/null`"  
+    if [ $? -eq 3 ]; then
+	problem "different contrasts in different inputs"
+    else
+	ninput_contrasts=`echo $input_contrasts | sed 's|contrast [0-9]*|\n|g' | grep -cv '^$'`
+	if [ $ninput_contrasts -ne $ncopeinputs ]; then
+	    problem "the number of expected input contrasts ($ncopeinputs) does not match actual number of input contrasts ($ninput_contrasts)"
+	fi
+    fi
+
+    # check that inputs are good
+    [ $THOROUGH ] && schmecho "Checking lower levels.  This may take a while (could run up to $(echo $ninputs $ncopeinputs | awk '{print ($1*3)+($1*$2)}') tests).  Please hold."
+    for ((i=1;i<=ninputs;i++)); do
+	if [ $COPEINPUT ]; then   # inputs are cope files
+	    copeimage=$(fsf_read "feat_files\($i\)")
+	    featdir=${copeimage%/*/*}
+	    if [ $(imtest $copeimage) -ne 1 ]; then
+		problem "no such cope image as $copeimage"
+	    else
+		[ $(grep -v 'custom_timing_files' $featdir/report_log.html | grep -ci 'error') -ne 0 ] && problem "found an \"error\" in $featdir/report_log.html"
+		if [ $THOROUGH ]; then
+		    lower_ncon_real=$(fsf_read -d $featdir/design.fsf ncon_real)
+		    for ((j=1;j<=lower_ncon_real;j++)); do
+			if [ "X$(fsf_read "\(copeinput\.$j\)")" == "X1" ]; then
+			    [ $(imtest $featdir/stats/zstat$j) -ne 1 ] && problem "$featdir/stats/zstat$j is a bad image"
+			fi
+		    done
+	        fi
+	    fi
+	else                      # inputs are FEAT directories
+	    featdir=$(fsf_read "feat_files\($i\)")
+	    if [ ! -e $featdir ]; then
+		problem "no such directory as $featdir"
+	    else
+		[ $(grep -v 'custom_timing_files' $featdir/report_log.html | grep -ci 'error') -ne 0 ] && problem "found an \"error\" in $featdir/report_log.html"
+		if [ $THOROUGH ]; then 
+		    lower_ncon_real=$(fsf_read -d $featdir/design.fsf ncon_real)
+		    for ((j=1;j<=lower_ncon_real;j++)); do
+			if [ "X$(fsf_read "\(copeinput\.$j\)")" == "X1" ]; then
+			    [ $(imtest $featdir/stats/zstat$j) -ne 1 ] && problem "$featdir/stats/zstat$j is a bad image"
+			else
+			    schmecho "RESEARCHER BEWARE: input cope $j is not being included in the analysis"
+			fi
+		    done
+		fi
+	    fi
+	fi
+	[ $DU ] && du -ch --max-depth 0 $featdir
+    done
+    schmecho "---------------------------------------------------"
+    schmecho
+
+
+    schmecho "-----------------MODEL-----------------------------"
+    # get number of groups (by membership)
+    ngrp=$(awk '/fmri\(groupmem\./ {print $3}' $DESIGN | sort -n | uniq | tail -1)
+
+    # check out modelling type selected
+    modelling=$(fsf_read mixed_yn)
+    case $modelling in
+	0) schmecho "modelling and estimation setting: Mixed Effects: Simple OLS";;
+	1) schmecho "modelling and estimation setting: Mixed Effects: FLAME 1+2";;
+	2) schmecho "modelling and estimation setting: Mixed Effects: FLAME 1";;
+	3) schmecho "modelling and estimation setting: Fixed effects";;
+        *) problem "modelling and estimation setting: unrecognized";;
+    esac
+    if [ $(fsfinfo -s $DESIGN | wc -l) -gt 1 ]; then
+	if [ $ngrp -gt 1 ]; then
+	    [ $modelling -ne 1 ] && irreg "since this looks like a group level analysis with multiple groups, FLAME 1+2 is recommended"
+	else
+	    [ $modelling -ne 2 ] && irreg "since this looks like a group level analysis with only one group, FLAME 1 is recommended"
+	fi
+    else
+	[ $modelling -ne 3 ] && irreg "since this looks like a within-subject analysis (intermediate level), fixed effects is recommended"
+    fi
+
+    # get the longest input and add 7 for pretty printing of input names
+    longest_input=$(expr $(for i in $(fsfinfo -i $DESIGN); do echo $i | sed 's|.*subjects/||' | wc -c; done | sort -n | tail -1) + 7)
+
+    # NOTE: can we get fsfinfo -m to do the printing?  # get fsfinfo -m to also print group ID number
+    [ ! $SILENT ] && fsfinfo -m $DESIGN
+
+    # print header
+#    evs_orig=$(fsf_read evs_orig)
+#    for ((e=1;e<=evs_orig;e++)); do
+#        schmecho "EV($e): "$(fsf_read "\(evtitle${e}\)")
+#    done
+#    [ ! $SILENT ] && printf "%${longest_input}s  group     " ''
+#    for ((e=1;e<=evs_orig;e++)); do
+#	[ ! $SILENT ] && printf "   EV${e}     " ''
+#    done
+#    schmecho
+
+    # print lines: <input> <group number> <value for EV1> ...
+#    for ((i=1;i<=ninputs;i++)); do
+#	[ ! $SILENT ] && printf "   %-${longest_input}s\t%-2d   " $(fsf_read "feat_files\($i\)" | sed 's|.*subjects/||') $(fsf_read "groupmem.$i\)")
+#	[ ! $SILENT ] && printf "   %6.2f  " $(for ((e=1;e<=evs_orig;e++)); do fsf_read "\(evg${i}.${e}\)"; done)
+#	schmecho
+#    done
+
+    # check EVs for being empty or not demeaned
+    for ((e=1;e<=evs_orig;e++)); do
+	for ((i=1;i<=ninputs;i++)); do fsf_read "\(evg${i}\.${e}\)"; done > $WD/tempev
+	if [ "$(sort $WD/tempev | uniq | tr '\n' ' ')" == "0 " ]; then
+	    problem "EV$e is empty"
+	elif [ $(awk '$1!=0 && $1!=1 {n++} END {print n*1}' $WD/tempev) -ne 0 ]\
+	   &&[ $(awk '{s+=$1} END {if (s<.0001 && s>-.0001) print "demeaned"; else print "not"}' $WD/tempev) != "demeaned" ]; then
+	    problem "EV$e is not 1s and 0s AND is not demeaned (it probably should be)"
+	fi
+    done
+    schmecho
+
+    # check contrasts for errors
+    ncon_real=$(fsf_read ncon_real)
+    for ((c=1;c<=ncon_real;c++)); do
+	conname="$(grep "conname_real\.${c})" $DESIGN | cut -d\" -f2)"
+#	[ ! $SILENT ] && printf "   %-14s" "contrast($c):"
+#	[ ! $SILENT ] && printf "   %7.2f " $(for ((e=1;e<=evs_orig;e++)); do fsf_read "\(con_real${c}.${e}\)"; done)
+#	[ ! $SILENT ] && printf "   $conname\n"
+	[ ! "$conname" ] && irreg "contrast $c is unnamed (this can cause problems for mine4stats)"
+    done
+    schmecho "---------------------------------------------------"
+    schmecho
+
+
+    schmecho "-----------------POST-STATS------------------------"
+    threshtype=$(fsf_read "\(thresh\)")
+    case $threshtype in 
+	0) threshtypename=none;; 
+	1) threshtypename=uncorrected;; 
+	2) threshtypename=voxel;; 
+	3) threshtypename=cluster;;
+    esac
+    schmecho "Thresholding type: $threshtypename"
+    [ $threshtype -ne 3 ] && irreg "cluster-based thresholding (the typical selection) is not selected"
+    schmecho "Z threshold: $(fsf_read z_thresh)"
+    [ "X$(fsf_read z_thresh)" != "X2.58" ] && irreg "the Z threshold is not set to 2.58 (the typical value)"
+    schmecho "---------------------------------------------------"
+    schmecho
+fi
+
+
+### REPORT AND EXIT
+if [ $SILENT ]; then
+    [ $SUM ] && let problems+=irregs
+    echo $problems | awk '{print $1*1}'
+else
+    if [ $problems ]&&[ $problems -gt 1 ]; then p="S"; fi
+    if [ $irregs ]&&[ $irregs -gt 1 ]; then i="IES"; else i="Y"; fi
+    if [ $irregs ] && [ $problems ]; then
+	echo "$problems POTENTIAL PROBLEM$p AND $irregs IRREGULARIT$i FOUND IN $DESIGN"
+	echo "look for lines that start with \"***\""
+    elif [ $problems ]; then
+	echo "$problems POTENTIAL PROBLEM$p FOUND IN $DESIGN"
+	echo "look for lines that start with \"***\""
+    elif [ $irregs ]; then
+	echo "$irregs IRREGULARIT$i FOUND IN $DESIGN"
+	echo "look for lines that start with \"***\""
+    else
+	echo "SWEET!  NO POTENTIAL PROBLEMS OR IRREGULARTIES FOUND IN $DESIGN"
+    fi
+fi
+
+exit 0

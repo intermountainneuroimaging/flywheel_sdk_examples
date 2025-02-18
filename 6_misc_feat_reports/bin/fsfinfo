@@ -1,0 +1,457 @@
+#!/bin/bash
+# Author: Luka Ruzic
+
+EXIT_multiple_parameters=3
+
+usage() {
+    {
+	echo
+	echo "Usage:  $0 <option> <analysis.(g)feat | design.fsf>" # [--c]"
+	echo "Description:"
+	echo "  retrieve information and properties of FEAT designs"
+	echo "  many of the higher level options will scan through all lower levels or input analyses"
+	echo "  inconsistencies among lower levels or input analyses are reported with a warning and exit status $EXIT_multiple_parameters"
+#    echo
+#    echo "Modifying Options:"
+#    echo "    --c    when scanning inputs/lower levels, print warning if there are differing parameters being used and"
+#    echo "           exit with status $EXIT_multiple_parameters"
+	echo "Options:"
+	echo "         -i             input (directories, copes, or functional data)"
+	echo "         -1i            just first input (directory, cope, or functional image)"
+	echo "         -t             analysis type (1=lower level, 2=higher level)"
+	echo "         -level         analysis level (level 1: lower level (input is functional data), 2: input is level 1, etc)"
+	echo "         -o             output directory name"
+	echo "         -m             view model"
+	echo "         -con           contrast names (real)"
+	echo "         -cono          contrast names (orig)"
+	echo "         -ev            EV names"
+	echo "         -evfiles       EV filenames (in lower levels)"
+	echo "         -tr            TR in seconds (in lower levels)"
+	echo "         -vols          number of volumes (in lower levels)"
+	echo "         -mod           modelling style (e.g., FLAME1)"
+	echo "         -dof           degrees of freedom in registrations (in lower levels)" 
+	echo "         -mc            motion correction (1=on, 0=off)"
+	echo "         -hpf           high pass filter cutoff (in lower levels)"
+	echo "         -stc           slice time correction"
+	echo "         -smooth        fwhm (mm) of gaussian smoothing used (in lower levels)"
+	echo "         -version       version of FEAT"
+	echo "  HIGHER LEVELS ONLY:"
+	echo "         -a             input analysis type(s)"
+	echo "         -s             subjects used (assumes input analyses live in subject directories)"
+	echo "         -n             number of inputs"
+	echo "         -i             direct input directories (identical to -l in any two level analysis)"
+	echo "         -1i            just first direct input directory (identical to -l in any two level analysis)"
+	echo "         -l             lower level FEAT directories"
+	echo "         -1l            just first lower level FEAT directory"
+	echo "         -icon          contrast names of input analyses (can be a lower level or an intermediate level) (real)"
+	echo "         -lcon          contrast names of lower level analyses (real)"
+	echo "         -icono         contrasts of input analyses (can be a lower level or an intermediate level) (orig)"
+	echo "         -lcono         contrast names of lower level analyses (orig)"
+	echo "         -iev           input analyses' EV names"
+	echo "         -lev           lower levels' EV names"
+	echo "         -mc            slice time correction in lower levels (1=on; 0=off)"
+	echo "         -stc           slice time correction in lower levels"
+	echo "         -lversion      version(s) of FEAT used in lowers"
+	echo
+    } >&2
+
+    exit 7
+}
+
+
+# note: this function only works if the desired output is singular
+# otherwise more sophisticated checking for multiple parameters is needed
+schmecho() {
+    if [ $# -gt 1 ]; then
+	echo "WARNING: different parameters in different lower levels" >&2
+	EXIT_STATUS=$EXIT_multiple_parameters
+    fi
+
+    echo $* | tr ' ' '\n'
+}
+
+if [ $# -ne 2 ]; then echo "ERROR: insufficient arguments" >&2; usage; fi
+
+#[[ "$*" =~ "--c" ]] && CHECK=set
+
+arg=$1
+if [[ "$2" =~ \.g{0,1}feat/{0,1}$ ]]; then
+    FSF=$2/design.fsf
+elif [[ "$2" =~ \.fsf$ ]]; then
+    FSF=$2
+else
+    echo "ERROR: second argument is not a FEAT analysis or fsf: $2" >&2
+    usage
+fi
+
+if [ ! -f $FSF ]; then
+    echo "ERROR: no such design file as $FSF" >&2
+    exit 1
+fi
+
+type=`awk '$2 ~ /fmri\(level\)/ {print $3}' $FSF`
+
+case $arg in
+    "-i")
+	awk '$2 ~ /feat_files\(/ {gsub("\"","",$3); print $3}' $FSF;;
+
+    "-1i")
+	fsfinfo -i $FSF | head -1;;
+
+    "-t")
+	if [ $type -eq 1 ]; then
+	    echo 1
+	elif [ $type -eq 2 ]; then
+	    echo 2
+	fi;;
+    
+    "-level")
+	x=$FSF
+	while :; do
+	    let nlevels++
+	    x=`fsfinfo -1i $x`
+	    [ `echo $x | grep -c 'feat$'` -ne 1 ] && break
+	done
+	echo $nlevels;;
+    
+    "-o")
+	awk '$2 ~ /fmri\(outputdir\)/ {gsub ("\"","",$3); print $3}' $FSF;;
+
+    "-m")
+	if [ $type -eq 1 ]; then
+	    # print EVs (also find EV titles to print header for contrasts)
+	    echo EVs:
+	    enum=0
+	    while read n ev; do
+		let enum++
+		echo "$n $ev"
+
+		convolve=`awk '$2 ~ /\(convolve'${n/EV/}'\)/ {print $3}' $FSF`		
+		evtitle=`grep "(evtitle${n/EV/})" $FSF | cut -d\" -f2`
+		if [ $convolve -le 3 ]; then
+		    evtitles+=($evtitle)
+		    # catch temporal derivatives
+		    if [ `awk '$2 ~ /\(deriv_yn'${n/EV/}'\)/ {print $3}' $FSF` -eq 1 ]; then
+			let enum++
+			echo "${n} TEMPORAL DERIVATIVE"
+			evtitles+=(${evtitle}_deriv)
+		    fi
+		else 
+		    # catch basis functions
+		    nbasisfuncs=`awk '$2 ~ /\(basisfnum'${n/EV/}'\)/ {print $3}' $FSF`
+		    if [ `awk '$2 ~ /\(convolve'${n/EV/}'\)/ {print $3}' $FSF` -gt 3 ]&&[ $nbasisfuncs -gt 0 ]; then
+			let enum+=$nbasisfuncs
+			for ((i=1;i<=nbasisfuncs;i++)); do 
+			    evtitles+=(${evtitle}_bf$i)
+			done
+			echo BASIS FUNCTIONS: $nbasisfuncs
+		    fi
+		fi
+	    done < <(fsfinfo -evfiles $FSF)
+	    
+	    echo; echo CONTRASTS:
+	    # print header (EV titles found above spaced neatly in two rows (allows 18 characters before overlap/push))
+	    n=0
+	    for ((i=0;i<${#evtitles[*]};i+=2)); do
+		if [ $i -eq 0 ]; then
+		    printf "%9s" ${evtitles[i]}
+		    nextlen=`expr 18 - ${#evtitles[i]}`
+		elif [ $i -eq 3 ]; then
+		    printf "%${nextlen}s" ${evtitles[i]}
+		else
+		    printf "%18s" ${evtitles[i]}
+		fi
+	    done
+	    echo
+	    for ((i=1;i<${#evtitles[*]};i+=2)); do
+		printf "%18s" ${evtitles[i]}
+	    done
+	    echo
+	    cnum=`awk '$2 ~ /ncon_real/ {print $3}' $FSF`
+	    # print contrast coding matrix
+	    for ((c=1;c<=cnum;c++)); do
+		printf "%s   %s\n" \
+		    "$(for ((e=1;e<=enum;e++)); do awk '$2 ~ /fmri\(con_real'${c}.${e}\)'/ {print $3}' $FSF; done | awk '{printf (" %8s",$1)}')" \
+		    "$(fsfinfo -con $FSF | awk '$2=='$c'' | cut -d' ' -f3-)"
+	    done
+	else
+	    echo EVs:
+	    echo -n "group"
+	    printf " %8s" `grep evtitle $FSF | cut -d\" -f2 | tr '\n' ' '`
+	    echo "   Input:"
+	    for ((i=1;i<=`fsfinfo -n $FSF`;i++)); do
+		a=`awk '/set feat_files\('${i}'\)/ {gsub("\"","",$3); print $3}' $FSF`
+		n=`awk '$2 ~ /fmri\(evg'${i}'\./ {print $3}' $FSF`
+		printf "%4d %s   %s\n" \
+		    "$(awk '$2 ~ /fmri\(groupmem\.'${i}'\)/ {print $3}' $FSF)" \
+		    "$(awk '$2 ~ /fmri\(evg'${i}'\./ {print $3}' $FSF | awk '{printf (" %8s",$1)}')" \
+		    $a
+	    done
+	    echo; echo CONTRASTS:
+	    
+	    printf "%5s" ""; printf " %8s" `grep evtitle $FSF | cut -d\" -f2`; echo
+	    [ `awk '$2 ~ /con_mode\)/ {print $3}' $FSF` == "orig" ] && ctype=orig || ctype=real
+	    cnum=`awk '$2 ~ /ncon_'${ctype}'\)/ {print $3}' $FSF`	
+	    enum=`fsfinfo -ev $FSF | wc -l`
+	    for ((c=1;c<=cnum;c++)); do
+		printf "%4s %s   %s\n" \
+		    "" \
+		    "$(for ((e=1;e<=enum;e++)); do awk '$2 ~ /'con_${ctype}${c}.${e}\)'/ {print $3}' $FSF; done | awk '{printf (" %8s",$1)}')" \
+		    "$(fsfinfo -con $FSF | awk '$2=='$c'' | cut -d' ' -f3-)"
+	    done
+	fi;;
+
+    "-con" | "-hcon")
+	sed -n 's|.*fmri(conname_real\.\(.*\)) \"\(.*\)\"|contrast \1 \2|p' $FSF;;
+
+    "-cono" | "-hcono")
+	sed -n 's|.*fmri(conname_orig\.\(.*\)) \"\(.*\)\"|contrast \1 \2|p' $FSF;;
+
+    "-ev")
+	for ((e=1;e<=`awk '$2 ~ /fmri\(evs_orig\)/ {print $3}' $FSF`;e++)); do
+	    sed -n 's|.*fmri(evtitle'${e}') \"\(.*\)\"|EV'${e}' \1|p' $FSF
+	done;;
+
+    "-evfiles")
+	if [ $type -eq 1 ]; then
+	    sed -n 's|.*fmri(custom\(.*\)) \"\(.*\)\"|EV\1 \2|p' $FSF
+	else
+	    for i in `fsfinfo -l $FSF`; do
+		if [ ! -d $i ]; then echo "ERROR: input analysis does not exist: $i"; exit 77; fi
+		fsfinfo -evfiles $i/design.fsf
+	    done
+	fi;;
+    
+    "-tr")
+	if [ $type -eq 1 ]; then
+	    awk '$2 ~ /fmri\(tr\)/ {print $3}' $FSF
+	else
+	    p=$(for i in `fsfinfo -l $FSF`; do
+		if [ ! -d $i ]; then echo "ERROR: input analysis does not exist: $i"; exit 77; fi
+		fsfinfo -tr $i/design.fsf
+	    done | sort -n | uniq)
+	    schmecho $p
+	fi;;
+
+    "-vols")
+	if [ $type -eq 1 ]; then
+	    awk '$2 ~ /fmri\(npts\)/ {print $3}' $FSF
+	else
+	    p=$(for i in `fsfinfo -l $FSF`; do
+		if [ ! -d $i ]; then echo "ERROR: input analysis does not exist: $i"; exit 77; fi
+		fsfinfo -vols $i/design.fsf
+	    done | sort -n | uniq)
+	    schmecho $p
+	fi;;
+
+    "-mod")
+	awk -v x=`awk '$2 ~ /fmri\(mixed_yn\)/ {print $3}' $FSF` '/# Higher-level modelling/ {go=1; next} /set fmri\(mixed_yn\)/ {exit} go==1 && $2==x {print substr($0,7)}' $FSF;;
+
+    "-dof")
+	if [ $type -eq 1 ]; then
+	    # note, this can fail if the normal oder of the fsf is mixed up
+	    awk '$2 ~ /fmri\(reginitial_highres_yn\)/ {ihr=$3} \
+                 $2 ~ /fmri\(reghighres_yn\)/ {hr=$3} \
+                 $2 ~ /fmri\(regstandard_yn\)/ {std=$3} \
+                 $2 ~ /fmri\(reginitial_highres_dof\)/ && ihr {print $0} \
+                 $2 ~ /fmri\(reghighres_dof\)/ && hr {print $0} \
+                 $2 ~ /fmri\(regstandard_dof\)/ && std {print $0}' \
+		$FSF | sed 's|.*fmri(\(.*_dof\))[ ]*\(.*\)|\1:\2|' | sort -n | uniq
+	else
+	    p=$(for i in `fsfinfo -l $FSF`; do
+		if [ ! -d $i ]; then echo "ERROR: input analysis does not exist: $i" >&2; exit 1; fi
+		fsfinfo -dof $i
+	    done | sort -n | uniq)
+
+	    if [ `echo $p | tr ' ' '\n' | cut -d: -f1 | sort -n | uniq -c | awk '$1>1 {s++; exit} END {print s*1}'` -gt 0 ]; then
+		echo "WARNING: different parameters in different lower levels" >&2
+		EXIT_STATUS=$EXIT_muliple_parameters
+	    fi
+	    echo $p | tr ' ' '\n' | sed 's| *$||' | sort -n | uniq
+	fi;;
+    
+    "-hpf")
+	if [ $type -eq 1 ]; then
+	    awk '$2 ~ /fmri\(paradigm_hp\)/ {print $3}' $FSF
+	else
+	    p=$(for i in `fsfinfo -l $FSF`; do
+		if [ ! -d $i ]; then echo "ERROR: input analysis does not exist: $i" >&2; exit 77; fi
+		fsfinfo -hpf $i
+	    done | sort -n | uniq)
+	    schmecho $p
+	fi;;
+
+    "-mc")
+	if [ $type -eq 1 ]; then
+	    awk '$2 ~ /fmri\(mc\)/ {if ($3) print 1; else print 0}' $FSF
+	else
+	    p=$(for i in `fsfinfo -l $FSF`; do 
+		if [ ! -d $i ]; then 
+		    echo "ERROR: input analysis does not exist: $i" >&2; exit 77
+		fi
+		fsfinfo -mc $i
+	    done | sort | uniq)
+	    schmecho $p
+	fi;;
+
+    "-stc")
+	if [ $type -eq 1 ]; then
+	    case `awk '$2 ~ /fmri\(st\)/ {print $3}' $FSF` in
+		"0") echo none;;
+		"1") echo regular_up;;
+		"2") echo regular_down;;
+		"3") echo slice_order_file;;
+		"4") echo slice_timings_file;;
+		"5") echo interleaved;;
+	    esac
+	else
+	    p=$(for i in `fsfinfo -l $FSF`; do
+		if [ ! -d $i ]; then echo "ERROR: input analysis does not exist: $i" >&2; exit 77; fi
+		fsfinfo -stc $i
+	    done | sort -n | uniq)
+	    schmecho $p
+	fi;;
+
+    "-smooth")
+	if [ $type -eq 1 ]; then
+	    awk '$2 ~ /fmri\(smooth\)/ {print $3"mm"}' $FSF
+	else
+	    p=$(for i in `fsfinfo -l $FSF`; do
+		if [ ! -d $i ]; then echo "ERROR: input analysis does not exist: $i" >&2; exit 77; fi
+		fsfinfo -smooth $i
+	    done | sort | uniq)
+	    schmecho $p
+	fi;;
+
+    "-version")
+	awk '$2 ~ /fmri\(version\)/ {print $3}'  $FSF;;
+
+# HIGHER LEVELS ONLY OPTIONS
+    "-a")
+	if [ $type -eq 1 ]; then echo "N/A: this is a lower level" >&2; exit 1; fi
+	awk '/set feat_files/ {print $3}' $FSF | cut -d\" -f2 | sed 's|.*/||' | sort -n | uniq;;
+
+    "-s")
+	if [ $type -eq 1 ]; then echo "N/A: this is a lower level" >&2; exit 1; fi
+	for i in `fsfinfo -l $FSF`; do
+	    basename `dirname $i`
+	done | sort -n | uniq;;
+
+    "-n")
+	if [ $type -eq 1 ]; then echo "N/A: this is a lower level" >&2; exit 1; fi
+	awk '$2 ~ /fmri\(npts\)/ {print $3}' $FSF;;
+
+    "-l")
+	if [ $type -eq 1 ]; then echo "N/A: this is a lower level" >&2; exit 1; fi
+
+	findlowers() {
+	    for a in $*; do
+#		if [ `awk '/set fmri\(level\)/ {print $3}' $a/design.fsf` -eq 2 ]; then     # this is faster, but would miss any improvements to fsfinfo -t
+# using getlowers is even faster, but that assumes no more than three levels in any analysis... safe assumption?
+		if [ "`fsfinfo -t $a`" -eq 2 ]; then
+		    findlowers `fsfinfo -i $a`
+		else
+		    echo $a
+		fi
+	    done
+	}
+
+	findlowers $FSF;;
+
+    "-1l")
+	if [ $type -eq 1 ]; then echo "N/A: this IS a lower level" >&2; exit 1; fi
+	fsfinfo -l $FSF | head -1;;
+
+    "-icon")
+	if [ $type -eq 1 ]; then echo "N/A: this is a lower level" >&2; exit 1; fi
+	p=$(for i in `fsfinfo -i $FSF`; do
+	    if [ ! -d $i ]; then echo "ERROR: input analysis does not exist: $i" >&2; exit 77; fi
+	    fsfinfo -con $i
+	done | sort -k2 -n | uniq)
+
+	if [ "$p" ]&&[ `echo $p | sed 's| \(contrast [0-9]*\)|\n\1|g' | awk '{print $1,$2}' | sort -n | uniq -c | awk '{print $1}' | sort -n | tail -1` -gt 1 ]; then
+	    echo "WARNING: different parameters in different lower levels" >&2
+	    EXIT_STATUS=$EXIT_multiple_parameters
+	fi
+	echo $p | sed 's| \(contrast [0-9]*\)|\n\1|g';;    
+
+    "-lcon")
+	if [ $type -eq 1 ]; then echo "N/A: this is a lower level" >&2; exit 1; fi
+	p=$(for i in `fsfinfo -l $FSF`; do
+	    if [ ! -d $i ]; then echo "ERROR: lower level analysis does not exist: $i" >&2; exit 77; fi
+	    fsfinfo -con $i
+	done | sort -k2 -n | uniq)
+	
+	if [ "$p" ]&&[ `echo $p | sed 's| \(contrast [0-9]*\)|\n\1|g' | awk '{print $1,$2}' | sort -n | uniq -c | awk '{print $1}' | sort -n | tail -1` -gt 1 ]; then
+            echo "WARNING: different parameters in different lower levels" >&2
+            EXIT_STATUS=$EXIT_multiple_parameters
+        fi
+	echo $p | sed 's| \(contrast [0-9]*\)|\n\1|g';;
+
+    "-icono")
+	if [ $type -eq 1 ]; then echo "N/A: this is a lower level" >&2; exit 1; fi
+	p=$(for i in `fsfinfo -i $FSF`; do
+	    if [ ! -d $i ]; then echo "ERROR: input analysis does not exist: $i" >&2; exit 77; fi
+	    fsfinfo -cono $i
+	done | sort -k2 -n | uniq)
+
+	if [ "$p" ]&&[ `echo $p | sed 's| \(contrast [0-9]*\)|\n\1|g' | awk '{print $1,$2}' | sort -n | uniq -c | awk '{print $1}' | sort -n | tail -1` -gt 1 ]; then
+            echo "WARNING: different parameters in different lower levels" >&2
+            EXIT_STATUS=$EXIT_multiple_parameters
+        fi
+        echo $p | sed 's| \(contrast [0-9]*\)|\n\1|g';;
+
+    "-lcono")
+	if [ $type -eq 1 ]; then echo "N/A: this is a lower level" >&2; exit 1; fi
+	p=$(for i in `fsfinfo -l $FSF`; do
+            if [ ! -d $i ]; then echo "ERROR: lower level analysis does not exist: $i" >&2; exit 77; fi
+            fsfinfo -cono $i
+        done | sort -k2 -n | uniq)
+
+	if [ "$p" ]&&[ `echo $p | sed 's| \(contrast [0-9]*\)|\n\1|g' | awk '{print $1,$2}' | sort -n | uniq -c | awk '{print $1}' | sort -n | tail -1` -gt 1 ]; then
+            echo "WARNING: different parameters in different lower levels" >&2
+            EXIT_STATUS=$EXIT_multiple_parameters
+        fi
+	echo $p | sed 's| \(contrast [0-9]*\)|\n\1|g';;
+
+    "-iev")
+	if [ $type -eq 1 ]; then echo "N/A: this is a lower level design" >&2; exit 1; fi
+	p=$(for a in `fsfinfo -i $FSF`; do
+	    if [ ! -d $i ]; then echo "ERROR: input analysis does not exist: $i" >&2; exit 77; fi
+	    fsfinfo -ev $a
+	done | sort -k1 -n | uniq)
+	
+	if [ "$p" ]&&[ `echo $p | sed 's| \(EV[0-9]*\)|\n\1|g' | awk '{print $1}' | sort -n | uniq -c | awk '{print $1}' | sort -n | tail -1` -gt 1 ]; then
+	    echo "WARNING: different parameters in different lower levels" >&2
+	    EXIT_STATUS=$EXIT_multiple_parameters
+	fi
+	echo $p | sed 's| \(EV[0-9]*\)|\n\1|g';;
+
+    "-lev")
+	if [ $type -eq 1 ]; then echo "N/A: this is a lower level design" >&2; exit 1; fi
+	p=$(for a in `fsfinfo -l $FSF`; do
+	    if [ ! -d $i ]; then echo "ERROR: lower level analysis does not exist: $i" >&2; exit 77; fi
+	    fsfinfo -ev $a
+	done | sort -k1 -n | uniq)
+
+	if [ "$p" ]&&[ "`echo $p | sed 's| \(EV[0-9]*\)|\n\1|g' | awk '{print $1}' | sort -n | uniq -c | awk '$1>1'`" ]; then
+	    echo "WARNING: different parameters in different lower levels" >&2
+            EXIT_STATUS=$EXIT_multiple_parameters
+	fi
+	echo $p | sed 's| \(EV[0-9]*\)|\n\1|g';;
+
+    "-lversion")
+	if [ $type -eq 1 ]; then echo "N/A: this is a lower level" >&2; exit 1; fi
+	p=$(for i in `fsfinfo -l $FSF`; do
+	    if [ ! -d $i ]; then echo "ERROR: lower level analysis does not exist: $i" >&2; exit 77; fi
+	    fsfinfo -version $i/design.fsf
+	done | sort -n | uniq)
+	
+	schmecho $p;;
+
+    *)
+	echo "UNRECOGNIZED OPTION:   $arg"
+	usage
+esac
+
+exit ${EXIT_STATUS:-0}

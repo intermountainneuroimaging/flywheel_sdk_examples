@@ -1,0 +1,64 @@
+#!/bin/bash
+#
+# randclustercontrasts10000_fwep
+#
+# 10-19-2016 KLP modified randclustercontrasts_tfce_corrp for fwep
+# 09-19-2018 KLP updated for 10000 permuations instead of the default 5000
+# 02-16-2019 KLP change output name from fwep to fwep_clustere
+#
+gfeat=${1:-$PWD/../../cold/higher_cold_robust0_16subj.gfeat}
+z=${2:-1}
+connectivity=${3:-26}
+here=$PWD
+#
+# FSL cluster option --connectivity; Luka's clusters option -c
+# 26 = vertices (default)
+# 18 = edges
+#  6 = faces
+conopt=""
+consuffix=""
+if [ "$connectivity" == "18" ] ; then
+    conopt="-c 18"
+    consuffix=_edges
+elif [ "$connectivity" == "6" ] ; then
+    conopt="-c 6"
+    consuffix=_faces
+fi
+#
+cd $gfeat
+if [ "$z" == "1" ]; then
+    gsum=fwep_summary_stats$consuffix
+else
+    gsum=fwep_summary_view_z${z}$consuffix
+fi
+mkdir -p $gsum/thresh_tstats
+mkdir -p $gsum/clusters
+mkdir -p $gsum/clusters_icbm
+mkdir -p $gsum/clusters_icbm_atlasq
+for c in cope*.feat; do
+    contrast=`cat report_stats.html | grep $c | cut -d '(' -f2 | cut -d ')' -f1 | sed -e 's|[() ]|_|g' -e 's|>|-|g' -e 's|<|-lt-|g' -e 's|&|+|g' `
+    statname=( `grep ContrastName design.con | cut -f2 | tr -d ' '` )
+    statno=`grep ContrastName design.con | cut -f1 | cut -c14-`
+    for i in $statno; do
+        let j="$i-1"
+        cname=${contrast}_${statname[$j]}
+        echo $i:$cname
+# thresholded tstat
+        corrptstat=randomise_results3/random_${contrast}_10000_clustere_corrp_tstat${i}
+#        tstat=$c/stats/tstat${i}
+        tstat=randomise_results3/random_${contrast}_10000_tstat${i}
+        threshtstat=$gsum/thresh_tstats/thresh_fwep_clustere_tstat${i}_${cname}
+        fslmaths $corrptstat -thr 0.95 -bin -mul $tstat $threshtstat
+# tstat clusters
+        ctstat1=$gsum/clusters/cluster_report_${cname}_z${z}_v10.csv
+        ctstat2=$gsum/clusters_icbm/cluster_report_${cname}_z${z}_v10.csv
+        ctstat3=$gsum/clusters_icbm_atlasq/cluster_report_${cname}_z${z}_v10.csv
+        no_ctstat1=$gsum/clusters/cluster_report_${cname}_z${z}_v10_empty.csv
+        no_ctstat2=$gsum/clusters_icbm/cluster_report_${cname}_z${z}_v10_empty.csv
+        no_ctstat3=$gsum/clusters_icbm_atlasq/cluster_report_${cname}_z${z}_v10_empty.csv
+        clusters $threshtstat $conopt -z $z -v 10 -o $ctstat1 --no_clusters_file $no_ctstat1
+        clusters $threshtstat $conopt -z $z -v 10 -o $ctstat2 -icbm --no_clusters_file $no_ctstat2
+        clusters $threshtstat $conopt -z $z -v 10 -o $ctstat3 -icbm -a --no_clusters_file $no_ctstat3
+    done
+done
+cd $here

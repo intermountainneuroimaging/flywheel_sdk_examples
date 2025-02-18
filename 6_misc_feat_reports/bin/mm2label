@@ -1,0 +1,115 @@
+#!/bin/bash
+# Author: Luka Ruzic
+
+MAXTRIES=3
+
+### setup atlases (1-indexed)
+ATLAS_DECODER=(\
+"" \
+"Harvard-Oxford Cortical Structural Atlas" \
+"Harvard-Oxford Subcortical Structural Atlas" \
+"JHU ICBM-DTI-81 White-Matter Labels" \
+"JHU White-Matter Tractography Atlas" \
+"Juelich Histological Atlas" \
+"MNI Structural Atlas" \
+"Oxford Thalamic Connectivity Probability Atlas" \
+)
+
+usage () {
+    {
+    echo "University of Colorado, Boulder (Banich lab)"
+    echo "Usage: $0 <x> <y> <z> [options]"
+    echo "Description:  takes MNI coordinates (mm) <x> <y> <z> and returns a name, hemisphere, and Brodmann Area (given by the Talairach Daemon)"
+    echo "              searches for the most probable Brodmann Area* label within a 9x9x9 cube of the MNI coordinates"
+    echo "              if no such label is found, mm2label exits with exit status 9"
+    echo "              (* only cortical gray matter, no subcortical or cerebellar Talairach labels are given)"
+    echo "Options:"
+    echo "  -icbm"
+    echo "     use the ICBM Lancaster coordinate conversion (default: Brett coordinates) (only applies to TD, not -a atlases)"
+# hidden in the usage because users should get used to using vox2mm instead
+# but retained so as to not break anything already using the option    
+#    echo "  -vox"
+#    echo "     convert input coordinates from MNI vox (2mm resolution) to MNI mm"
+    echo "  -a <ATLAS CODE>"
+    echo "     report from an FSL probabilistic atlas instead of the Talairach Daemon"
+    echo "       ATLAS CODES:"
+    for (( i=1; i<${#ATLAS_DECODER[*]} ; i++ )); do
+	echo "          $i: ${ATLAS_DECODER[i]}"
+    done
+    echo "  -p <pct>"
+    echo "     only report areas above <pct> percent probability"
+    echo "     (only works with -a)"
+    echo "     (only integers acceptable)"
+    } >&2
+
+    exit 7
+}
+
+[[ "$*" =~ help ]] && usage
+
+### PARSE ARGUMENTS
+PCT=0
+n=0
+while [ "$1" ]; do
+    if [[ "$1" =~ ^-{0,1}[0-9]*$ ]]; then
+	COORDINATES+="$1 "
+	let n++
+	shift
+    elif [ "$1" == "-icbm" ]; then
+	ICBM=set
+	shift
+    elif [ "$1" == "-vox" ]; then
+	VOX=set
+	shift
+    elif [ "$1" == "-a" ]; then
+	ATLAS=("${ATLAS_DECODER[$2]}")
+	if [ ! "$ATLAS" ]; then echo "ERROR: $2 is not a valid atlas code" >&2; exit 1; fi
+	shift 2
+    elif [ "$1" == "-p" ]; then
+	PCT=$2
+	shift 2
+    else 
+	echo "UNRECOGNIZED ARGUMENT: $1" >&2
+	usage
+    fi
+done
+
+### error checking
+if [ $n -ne 3 ]; then
+    let e++; echo "ERROR: 3 and only 3 coordinates allowable" >&2
+fi
+if [[ "$p" =~ [^0-9] ]]; then
+    let e++; echo "ERROR: only integers acceptable" >&2
+fi
+
+[ $e ] && usage
+
+# retrieve label
+if [ ! "$ATLAS" ]; then
+
+    # run python version of TD labels
+    tdoutput=`ras2label.py ${COORDINATES} TD`
+    # parse into desired fields
+    fields="$(echo $tdoutput | awk -F'.' 'BEGIN {RS="%"} /Brodmann/ {print $1";" $3";" $5; exit}' | sed 's|*|_|g')"
+
+    hemisphere="$(echo $tdoutput | cut -d. -f1 | grep -o '[LR]')"
+    lobe="$(echo $tdoutput | cut -d. -f2 | tr ' ' _)"
+    region="$(echo $tdoutput | cut -d. -f3 | tr ' ' _)"
+    tissuetype="$(echo $tdoutput | cut -d. -f4 | tr ' ' _)"
+    BArea="$(echo $tdoutput | cut -d. -f5 | cut -d" " -f3)"    
+
+
+    # return output
+    [ $region ] && echo "$region `[ $hemisphere ] && echo $hemisphere` `[ $BArea ] && echo BA$BArea`" || exit 9
+else
+    if [[ "$ATLAS" == "Harvard-Oxford Cortical Structural Atlas" ]] ; then
+        label=`ras2label.py ${COORDINATES} HO_cort`;
+    elif [[ "$ATLAS" == "Harvard-Oxford Subcortical Structural Atlas" ]] ; then
+        label=`ras2label.py ${COORDINATES} HO_sub`;
+    fi
+    echo $label
+    
+fi
+
+
+# exit 0

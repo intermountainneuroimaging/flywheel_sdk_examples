@@ -1,0 +1,45 @@
+#!/bin/bash
+
+usage() {
+    {
+	echo "Usage: mni2tal xmni ymni zmni"
+	echo "       all coordinates in mm"
+    } >&2
+    
+    exit 7
+}
+
+if [ $# -ne 3 ]||[[ "$*" =~ [^0-9-.\ ] ]]; then
+    usage
+fi
+
+# take arguments into variables
+xmni=$1
+ymni=$2
+zmni=$3
+
+# MNI to TAL conversion (from Matthew Brett http://imaging.mrc-cbu.cam.ac.uk/imaging/MniTalairach)
+# Above the AC (zmni >= 0):
+# xtal = 0.9900 * xmni
+# ytal = (0.9688 * ymni) + (0.0460 * zmni)
+# ztal = (-0.0485 * ymni) + (0.9189 * zmni)
+#
+# Below the AC (zmni < 0):
+# xtal = 0.9900 * xmni
+# ytal = (0.9688 * ymni) + (0.0420 * zmni)
+# ztal = (-0.0485 * ymni) + (0.8390 * zmni)
+
+if [ `echo $zmni | awk '{if ($1>=0) print 1; else print 0}'` -eq 1 ]; then
+    xtal=`echo $xmni | awk '{printf ("%.1f",.99*$1)}'`
+    ytal=`echo $ymni $zmni | awk '{printf ("%.1f",(.9688*$1)+(.046*$2))}'`
+    ztal=`echo $ymni $zmni | awk '{printf ("%.1f",(-.0485*$1)+(.9189*$2))}'`
+else
+    xtal=`echo $xmni | awk '{printf ("%.1f",.99*$1)}'`
+    ytal=`echo $ymni $zmni | awk '{printf ("%.1f",(.9688*$1)+(.042*$2))}'`
+    ztal=`echo $ymni $zmni | awk '{printf ("%.1f",(-.0485*$1)+(.8390*$2))}'`    
+fi
+
+#return
+echo "$xtal $ytal $ztal"
+
+exit 0
