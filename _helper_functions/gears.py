@@ -70,21 +70,28 @@ def generate_inputs(session, template):
                 fw_container = find_analysis(session, template["inputs"][key]["find-analysis"],status=["complete"])
             else:
                 log.error("Unable to interpret inputs: Project %s Subject %s Session %s %s ", project.label, full_session.subject.label, full_session.label, full_session.id)
-
+            
+            # Add option to insert Flywheel labels into searchable file names ** allows for different inputs based on subject name or session name
+            lookup_table = {
+                "SUBJECT": session.subject.label,
+                "SESSION": session.label,
+            }
             # if 'value' key is passed for an input, just get the file from flywheel using given name"
             if "value" in template["inputs"][key]:
-                file_found = fw_container.get_file(template["inputs"][key]["value"])
+                filename_from_lookup = apply_lookup(template["inputs"][key]["value"],lookup_table)
+                file_found = fw_container.get_file(filename_from_lookup)
                 if "optional" in template["inputs"][key] and template["inputs"][key]["optional"] == True and not file_found:
                         pass
                 else:
-                    myinputs[key]=fw_container.get_file(template["inputs"][key]["value"])
+                    myinputs[key]=file_found
 
             # if 'regex' key is passed from an input, look for files matching the regular expression, save file if a match is found
             elif "regex" in template["inputs"][key]:
 
                 namelist = [file['name'] for file in fw_container.files]
-
-                r1=re.compile(template["inputs"][key]["regex"])
+                
+                filename_from_lookup = apply_lookup(template["inputs"][key]["regex"], lookup_table)
+                r1=re.compile(filename_from_lookup)
                 matching_names = [x for x in namelist if r1.search(x)]
 
                 if len(matching_names) == 1:
@@ -108,6 +115,12 @@ def generate_inputs(session, template):
     
     return myinputs
 
+
+def apply_lookup(text, lookup_table):
+    if '{' in text and '}' in text:
+        for lookup in lookup_table:
+            text = text.replace('{' + lookup + '}', lookup_table[lookup])
+    return text
 
 
 def my_analysis_exists(container, gear_info, status=["complete","running","pending"], status_bool_type="any", count_up_to_failures=1, analysis_label=None):

@@ -16,10 +16,12 @@ log = logging.getLogger('main')
 # import custom helper functions, need to first add path to system envrionment... 
 #      do that using current directory inside jupyter notebooks, 
 #      or __file__ attribute in script
+absolute_path = os.path.abspath(__file__)
 try:
-    sys.path.insert(0, os.path.dirname(__file__))
+    sys.path.insert(0, Path(absolute_path).parts[0:-2])
 except NameError:
     sys.path.insert(0, os.path.dirname(os.getcwd()))
+
 from _helper_functions import tables, fileIO
 
 
@@ -27,7 +29,7 @@ from _helper_functions import tables, fileIO
 os.umask(0o002);
 
 user_inputs = {  
-    "download-path": "/scratch/alpine/amhe4269/cancat/analysis"
+    "download-path": "/pl/active/banich/studies/mindmem/"
 }
 
 # set default permissions
@@ -38,14 +40,9 @@ fw = flywheel.Client('')
 
 # option 2: download directly from list of analysis ids
 analysis_ids = [
-    '67a5649d64ab7de9b6443528',
-    '67a6599c2c68e61dc120a354'
+    'analysis-id-1',
+    'analysis-id-2',
 ]
 os.makedirs(user_inputs["download-path"], exist_ok=True)
 for aid in analysis_ids:
-    download_session_analyses_byid(aid,user_inputs["download-path"])
-
-        
-
-
-
+    fileIO.download_session_analyses_byid(aid,user_inputs["download-path"])

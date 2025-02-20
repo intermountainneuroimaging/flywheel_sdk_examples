@@ -48,8 +48,8 @@ def main(fmri_file, confounds_file, mask_file):
 
     # Step 3: Reshape back to the 3D volume
     cleaned_fmri_img = masking.unmask(nuisance_regressed_data, mask_img=mask)
-    nib.save(cleaned_fmri_img, fmri_file.replace('_bold.nii.gz','nr24_bold.nii.gz'))
-    print("Saved file: "+fmri_file.replace('_bold.nii.gz','nr24_bold.nii.gz'))
+    nib.save(cleaned_fmri_img, fmri_file.replace('_bold.nii.gz','nr_bold.nii.gz'))
+    print("Saved file: "+fmri_file.replace('_bold.nii.gz','nr_bold.nii.gz'))
 
 
     end_time = time.perf_counter()

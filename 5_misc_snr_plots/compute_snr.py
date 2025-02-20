@@ -27,7 +27,6 @@ def get_spacing(n_slice, n_subplots = 9):
 
 
 # main
-files = glob.glob('/scratch/alpine/amhe4269/unipain/analysis/fmriprep/sub-*/ses-*/func/*_desc-confounds_timeseries.tsv')
 colnames=['trans_x', 'trans_x_derivative1', 'trans_x_derivative1_power2', 'trans_x_power2', 'trans_y', 'trans_y_derivative1', 'trans_y_power2', 'trans_y_derivative1_power2', 'trans_z', 'trans_z_derivative1', 'trans_z_power2', 'trans_z_derivative1_power2', 'rot_x', 'rot_x_derivative1', 'rot_x_power2', 'rot_x_derivative1_power2', 'rot_y', 'rot_y_derivative1', 'rot_y_derivative1_power2', 'rot_y_power2', 'rot_z', 'rot_z_derivative1', 'rot_z_power2', 'rot_z_derivative1_power2', 'a_comp_cor_00', 'a_comp_cor_01', 'a_comp_cor_02', 'a_comp_cor_03', 'a_comp_cor_04', 'a_comp_cor_05', '^motion_outlier[a-zA-Z0-9]*$']
 
 

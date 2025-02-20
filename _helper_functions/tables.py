@@ -137,6 +137,14 @@ def get_table_by_template(user_inputs, template_file_name="gear_template.json"):
         # analysis information...
         my_gear_name=itr_template["gear-name"]+"/"+itr_template["gear-version"] if "gear-version" in itr_template else itr_template["gear-name"]
         my_gear_label = itr_template["custom-label"] if "custom-label" in itr_template else itr_template["gear-name"]
+        
+        # what if gear names are used more than once...
+        ii=0
+        while my_gear_name in gears_dict.keys():
+            my_gear_name += "+"
+            ii += 1
+            if ii > 10:
+                break
 
         gears_dict.update({my_gear_name: my_gear_label})
     
@@ -144,7 +152,8 @@ def get_table_by_template(user_inputs, template_file_name="gear_template.json"):
     
     #initalize columns
     for gear in gears_dict.keys():
-        table[gears_dict[gear]] = ""
+        gear_label = gears_dict[gear]
+        table[gear_label] = ""
     
     # STEP 3: fill in analysis columns
     for idx, row in table.iterrows():
@@ -155,12 +164,16 @@ def get_table_by_template(user_inputs, template_file_name="gear_template.json"):
                     continue
                 if analysis.job.state == "complete":
                     for g in gears_dict.keys():
+                        # store gear label 
+                        g_label = gears_dict[g]
+                        # remove placeholder for repeat columns...
+                        gear_name = g.replace("+","")
                         if "/" in g:   ## this is a gear + version
-                            if (analysis.gear_info.name == g.split("/")[0]) and (analysis.gear_info.version == g.split("/")[1]) and (gears_dict[g] in analysis.label):
-                                table.loc[idx, gears_dict[g]] = str(analysis.id)
+                            if (analysis.gear_info.name == gear_name.split("/")[0]) and (analysis.gear_info.version == gear_name.split("/")[1]) and (g_label in analysis.label):
+                                table.loc[idx, g_label] = str(analysis.id)
                         else:
-                            if (analysis.gear_info.name == g) and (gears_dict[g] in analysis.label):
-                                table.loc[idx, gears_dict[g]] = str(analysis.id)
+                            if (analysis.gear_info.name == gear_name) and (g_label in analysis.label):
+                                table.loc[idx, g_label] = str(analysis.id)
     
     # make sure notes are last column
     column_to_move = table.pop("Notes")
