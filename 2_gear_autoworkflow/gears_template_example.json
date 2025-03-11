@@ -1,0 +1,100 @@
+{
+    "__comment__": "example template",
+    "date modified": "2023-08-15",
+    "analysis": 
+    [
+        {
+            "__comment__": "step 1: analysis gear bids curate",
+            "gear-name": "curate-bids",
+            "gear-version":"2.1.3_1.0.7",
+            "inputs": {
+                "template": {
+                    "regex": "-reproin-template.json$",
+                    "parent-container": "project",
+                    "optional": true
+                }
+            },
+            "config": {
+                "reset": true,
+                "intendedfor_regexes": ".*fmap.* nii",
+                "use_or_save_config": "Ignore Config File"
+            },
+            "tags": [],
+            "count-failures": 1,
+            "sleep_seconds": 30
+        },
+        {
+            "__comment__": "step 2: analysis gear hierarchy-curator - session completeness",
+            "gear-name": "hierarchy-curator",
+            "gear-version":"2.1.4_inc0.2",
+            "inputs": {
+                "curator": {
+                    "regex": "_completeness.py$",
+                    "parent-container": "project"
+                },
+                "additional-input-one": {
+                    "regex": "_completeness_template.csv$",
+                    "parent-container": "project"
+                }
+            },
+            "config": {
+                "reset": true
+            },
+            "tags": [],
+            "custom-label": "completeness-curator",
+            "count-failures": 1,
+            "prerequisites":  
+            [
+                {
+                    "prereq-gear": "curate-bids",
+                    "prereq-complete-analysis":"any"
+                }
+            ],
+            "sleep_seconds": 30
+        },
+        {
+            "__comment__": "step 3: analysis gear bids-mriqc - run for complete sessions",
+            "gear-name": "bids-mriqc",
+            "gear-version":"1.2.4_22.0.6_inc1.2",
+            "inputs": {
+                "bidsignore": {
+                    "value": ".bidsignore",
+                    "parent-container": "project",
+                    "optional": true
+                }
+            },
+            "config": {
+                "fd_thres": 0.2,
+                "gear-dry-run": false,
+                "gear-keep-output": false,
+                "gear-writable-dir": "/pl/active/ics/fw_temp_data",
+                "mem_gb": 16,
+                "n_cpus": 4,
+                "slurm-cpu": "4",
+                "slurm-nodes": "1",
+                "slurm-ntasks": "1",
+                "slurm-partition": "blanca-ics",
+                "slurm-account": "blanca-ics",
+                "slurm-qos": "blanca-ics",
+                "slurm-ram": "16G",
+                "slurm-time": "1428"
+            },
+            "tags": ["hpc"],
+            "count-failures": 2,
+            "prerequisites":  
+            [
+                {
+                    "prereq-gear": "curate-bids",
+                    "prereq-complete-analysis":"any"
+                },
+                {
+                    "prereq-gear": "hierarchy-curator",
+                    "prereq-analysis-label": "completeness-curator",
+                    "prereq-complete-analysis":"any"
+                },
+            ],
+            "sleep_seconds": 30,
+            "completeness-tags": ["Run Downstream Analyses"]
+        }
+    ]
+}
