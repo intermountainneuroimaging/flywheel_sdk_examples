@@ -68,6 +68,10 @@ def generate_inputs(session, template):
                 fw_container = fw.get_container(session.parents[template["inputs"][key]["parent-container"]])
             elif "find-analysis" in template["inputs"][key]:
                 fw_container = find_analysis(session, template["inputs"][key]["find-analysis"],status=["complete"])
+            elif "find-analysis-label" in template["inputs"][key]:
+                gear_info = template["inputs"][key]["find-analysis-label"].split(":")[0]
+                label = template["inputs"][key]["find-analysis-label"].split(":")[1]
+                fw_container = find_analysis(session, gear_info,status=["complete"], analysis_label=label)
             else:
                 log.error("Unable to interpret inputs: Project %s Subject %s Session %s %s ", project.label, full_session.subject.label, full_session.label, full_session.id)
             
@@ -178,7 +182,7 @@ def my_analysis_exists(container, gear_info, status=["complete","running","pendi
     return flag
 
 
-def find_analysis(container, gear_info, status=["complete","running","pending"]):
+def find_analysis(container, gear_info, status=["complete","running","pending"], analysis_label=None):
     # Returns analysis object if exists by analysis name in that container
     # make sure to pass full session object (use fw.get_session(session.id))
     #
@@ -205,6 +209,10 @@ def find_analysis(container, gear_info, status=["complete","running","pending"])
             if gear_version:
                 r1 = re.compile(gear_version)
                 if not r1.search(analysis.gear_info["version"]):
+                    continue
+                    
+            if analysis_label:
+                if analysis_label not in analysis.label:
                     continue
                     
             analysis_job=analysis.job

@@ -158,22 +158,27 @@ def get_table_by_template(user_inputs, template_file_name="gear_template.json"):
     # STEP 3: fill in analysis columns
     for idx, row in table.iterrows():
         full_session = fw.get_session(row["flywheel_id"])
-
-        for analysis in full_session.analyses:
+        analyses = full_session.analyses
+        for g in gears_dict.keys():
+            # store gear label 
+            g_label = gears_dict[g]
+            
+            # remove placeholder for repeat columns...
+            gear_name = g.replace("+","")
+            
+            # loop through analyses to find match...
+            for analysis in analyses:
+                print(analysis.label)
                 if not analysis.job:
                     continue
+                print(table.loc[idx, g_label])
                 if analysis.job.state == "complete":
-                    for g in gears_dict.keys():
-                        # store gear label 
-                        g_label = gears_dict[g]
-                        # remove placeholder for repeat columns...
-                        gear_name = g.replace("+","")
-                        if "/" in g:   ## this is a gear + version
-                            if (analysis.gear_info.name == gear_name.split("/")[0]) and (analysis.gear_info.version == gear_name.split("/")[1]) and (g_label in analysis.label):
-                                table.loc[idx, g_label] = str(analysis.id)
-                        else:
-                            if (analysis.gear_info.name == gear_name) and (g_label in analysis.label):
-                                table.loc[idx, g_label] = str(analysis.id)
+                    if "/" in g:   ## this is a gear + version
+                        if (analysis.gear_info.name == gear_name.split("/")[0]) and (analysis.gear_info.version == gear_name.split("/")[1]) and (g_label in analysis.label):
+                            table.loc[idx, g_label] = str(analysis.id)
+                    else:
+                        if (analysis.gear_info.name == gear_name) and (g_label in analysis.label):
+                            table.loc[idx, g_label] = str(analysis.id)
     
     # make sure notes are last column
     column_to_move = table.pop("Notes")
