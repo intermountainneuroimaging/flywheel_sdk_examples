@@ -65,7 +65,10 @@ def generate_inputs(session, template):
 
             # put input files in the format flywheel gear.run expects...
             if "parent-container" in template["inputs"][key]:
-                fw_container = fw.get_container(session.parents[template["inputs"][key]["parent-container"]])
+                if template["inputs"][key]["parent-container"] == "session":
+                    fw_container = session
+                else:
+                    fw_container = fw.get_container(session.parents[template["inputs"][key]["parent-container"]])
             elif "find-analysis" in template["inputs"][key]:
                 fw_container = find_analysis(session, template["inputs"][key]["find-analysis"],status=["complete"])
             elif "find-analysis-label" in template["inputs"][key]:
